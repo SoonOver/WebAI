@@ -204,8 +204,8 @@ function HomeScreen({ navigation }) {
         setManga(data);
         setLoading(false);
       })
-      .catch(() => {
-        setError('Could not load the catalog. Check your connection and try again.');
+      .catch((err) => {
+        setError(`Error: ${err?.message || err}`);
         setManga([]);
         setLoading(false);
       });
@@ -218,8 +218,8 @@ function HomeScreen({ navigation }) {
       .then((data) => {
         setManga(data);
       })
-      .catch(() => {
-        setError('Could not load the catalog. Check your connection and try again.');
+      .catch((err) => {
+        setError(`Error: ${err?.message || err}`);
         setManga([]);
       })
       .finally(() => {
@@ -701,8 +701,9 @@ function ReaderScreen({ route, navigation }) {
   const [images, setImages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [mode, setMode] = useState('webtoon');
+  const [errorMessage, setErrorMessage] = useState('');
 
-  const loadImages = async (targetUrl) => {
+  const loadImages = async (targetUrl, retryCount = 0) => {
     // #region agent log
     debugLog(
       'App.js:ReaderScreen.loadImages',
@@ -712,11 +713,13 @@ function ReaderScreen({ route, navigation }) {
         title,
         targetUrlPreview: String(targetUrl).slice(0, 120),
         currentIndex,
+        retryCount,
       },
       'H3'
     );
     // #endregion
     setLoading(true);
+    setErrorMessage('');
     try {
       const local = await DownloadManager.getLocalUri(targetUrl);
       // #region agent log
@@ -739,23 +742,53 @@ function ReaderScreen({ route, navigation }) {
           'H1'
         );
         // #endregion
+        if (!remote || remote.length === 0) {
+          throw new Error('No images returned from source');
+        }
         setImages(remote || []);
       }
     } catch (error) {
       console.error(error);
+      const errMsg = String(error?.message || error).slice(0, 220);
       // #region agent log
       debugLog(
         'App.js:ReaderScreen.loadImages',
         'catch',
-        { err: String(error?.message || error).slice(0, 220), name: error?.name },
+        { err: errMsg, name: error?.name, retryCount },
         'H2'
       );
       // #endregion
+
+      // Auto-retry once after a short delay
+      if (retryCount < 1) {
+        debugLog('App.js:ReaderScreen.loadImages', 'auto_retry', {}, 'H4');
+        setTimeout(() => {
+          loadImages(targetUrl, retryCount + 1);
+        }, 1500);
+        return; // Don't set loading false yet
+      }
+
       setImages([]);
-      Alert.alert('Error', 'Could not load this chapter.');
+      setErrorMessage(errMsg);
+
+      // Show a more helpful error message
+      let userMessage = 'Could not load this chapter.';
+      if (errMsg.includes('All') && errMsg.includes('domains failed')) {
+        userMessage = `Source "${source}" is currently unreachable. Try another source or check your internet connection.`;
+      } else if (errMsg.includes('No images')) {
+        userMessage = `No images found for this chapter on "${source}". The site may have changed its layout.`;
+      } else if (errMsg.includes('timeout') || errMsg.includes('abort')) {
+        userMessage = 'Request timed out. Check your internet connection and try again.';
+      } else if (errMsg.includes('fetch') || errMsg.includes('Network')) {
+        userMessage = 'Network error. Make sure you have an active internet connection.';
+      } else if (errMsg.includes('script missing')) {
+        userMessage = `Bato.to anti-scraping protection blocked this chapter. Try MangaDex instead.`;
+      }
+      Alert.alert('Error', userMessage);
     }
     setLoading(false);
   };
+
 
   useEffect(() => {
     loadImages(url);

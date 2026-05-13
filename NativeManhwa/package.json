@@ -21,6 +21,7 @@
     "cheerio-without-node-native": "^0.20.2",
     "crypto-js": "^4.2.0",
     "expo": "~54.0.33",
+    "expo-build-properties": "~1.0.10",
     "expo-file-system": "~19.0.22",
     "expo-font": "~14.0.11",
     "expo-status-bar": "~3.0.9",
