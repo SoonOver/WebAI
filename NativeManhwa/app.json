@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "NativeManhwa",
+    "slug": "NativeManhwa",
+    "version": "1.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#000000"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.osmium.manhwahub"
+    },
+    "android": {
+      "package": "com.osmium.manhwahub",
+      "versionCode": 11,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#000000"
+      },
+      "edgeToEdgeEnabled": true
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "7d589573-93c3-41e6-bd73-d17f17ced69e"
+      }
+    },
+    "plugins": [
+      "expo-font"
+    ]
+  }
+}
