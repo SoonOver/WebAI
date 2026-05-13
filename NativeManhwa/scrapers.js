@@ -27,19 +27,36 @@ export const SOURCE_ORDER = [
 
 const BATO_BASE = "https://bato.to";
 
-async function safeFetch(url, options = {}) {
+async function safeFetch(url, options = {}, timeoutMs = 25000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  const fetchOptions = { ...options, signal: controller.signal };
+
   try {
-    const res = await fetch(url, options);
+    const res = await fetch(url, fetchOptions);
+    clearTimeout(id);
     if (res.ok) return res;
     // Jika tidak ok, lempar error agar ditangkap catch dan proxy
     throw new Error(`HTTP ${res.status}`);
   } catch (err) {
+    clearTimeout(id);
     // Fallback menggunakan proxy CORS jika kena blokir ISP / Internet Positif
     // Hati-hati, tidak semua proxy mendukung Cloudflare (seperti bato/mangadex),
     // tapi ini sangat efektif untuk Komikindo/MangaThemesia
     const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
-    const proxyRes = await fetch(proxyUrl, options);
-    return proxyRes;
+    
+    const proxyController = new AbortController();
+    const proxyId = setTimeout(() => proxyController.abort(), timeoutMs);
+    const proxyOptions = { ...options, signal: proxyController.signal };
+    
+    try {
+      const proxyRes = await fetch(proxyUrl, proxyOptions);
+      clearTimeout(proxyId);
+      return proxyRes;
+    } catch (proxyErr) {
+      clearTimeout(proxyId);
+      throw proxyErr;
+    }
   }
 }
 
@@ -673,7 +690,7 @@ async function mdSearch(lang, query) {
   const tl = lang === "id" ? "&availableTranslatedLanguage[]=id" : "";
   const res = await safeFetch(
     `https://api.mangadex.org/manga?title=${encodeURIComponent(query)}&limit=20&includes[]=cover_art${tl}`,
-    { headers: HEADERS, signal: AbortSignal.timeout(25000) },
+    { headers: HEADERS },
   );
   const json = await res.json();
   const src =
@@ -693,13 +710,13 @@ async function mdSearch(lang, query) {
 async function mdDetails(lang, id) {
   const res = await safeFetch(
     `https://api.mangadex.org/manga/${id}?includes[]=cover_art`,
-    { headers: HEADERS, signal: AbortSignal.timeout(25000) },
+    { headers: HEADERS },
   );
   const m = (await res.json()).data;
   const tl = lang === "id" ? "id" : "en";
   const chRes = await safeFetch(
     `https://api.mangadex.org/manga/${id}/feed?limit=500&translatedLanguage[]=${tl}&order[chapter]=desc`,
-    { headers: HEADERS, signal: AbortSignal.timeout(25000) },
+    { headers: HEADERS },
   );
   const chJson = await chRes.json();
   const cover = m.relationships.find((r) => r.type === "cover_art");
@@ -721,7 +738,7 @@ async function mdDetails(lang, id) {
 async function mdImages(chapterId) {
   const res = await safeFetch(
     `https://api.mangadex.org/at-home/server/${chapterId}`,
-    { headers: HEADERS, signal: AbortSignal.timeout(25000) },
+    { headers: HEADERS },
   );
   const json = await res.json();
   const hash = json.chapter.hash;
