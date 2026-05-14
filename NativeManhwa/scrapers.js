@@ -52,27 +52,31 @@ async function safeFetch(url, options = {}, timeoutMs = 25000) {
     const res = await fetch(url, fetchOptions);
     clearTimeout(id);
     if (res.ok) return res;
-    // Jika tidak ok, lempar error agar ditangkap catch dan proxy
     throw new Error(`HTTP ${res.status}`);
   } catch (err) {
     clearTimeout(id);
-    // Fallback menggunakan proxy CORS jika kena blokir ISP / Internet Positif
-    // Hati-hati, tidak semua proxy mendukung Cloudflare (seperti bato/mangadex),
-    // tapi ini sangat efektif untuk Komikindo/MangaThemesia
-    const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
 
-    const proxyController = new AbortController();
-    const proxyId = setTimeout(() => proxyController.abort(), timeoutMs);
-    const proxyOptions = { ...options, signal: proxyController.signal };
+    // List of proxies to try if direct fetch fails (often due to ISP block)
+    const proxies = [
+      `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(url)}`,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    ];
 
-    try {
-      const proxyRes = await fetch(proxyUrl, proxyOptions);
-      clearTimeout(proxyId);
-      return proxyRes;
-    } catch (proxyErr) {
-      clearTimeout(proxyId);
-      throw proxyErr;
+    for (const proxyUrl of proxies) {
+      const pController = new AbortController();
+      const pId = setTimeout(() => pController.abort(), timeoutMs);
+      try {
+        const pRes = await fetch(proxyUrl, {
+          ...options,
+          signal: pController.signal,
+        });
+        clearTimeout(pId);
+        if (pRes.ok) return pRes;
+      } catch (pErr) {
+        clearTimeout(pId);
+      }
     }
+    throw err;
   }
 }
 
