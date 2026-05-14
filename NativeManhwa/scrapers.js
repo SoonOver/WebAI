@@ -1,6 +1,6 @@
-/**
- * Multi-source scraper: Bato.to, MangaDex, Komikindo-style WP, BacaKomik-style WP,
- * dan situs ber-tema MangaThemesia (banyak scanlator Indonesia memakai tema ini).
+/*https://komiku.org/
+ * Multi - source scraper: Bato.to, MangaDex, Komikindo - style WP, BacaKomik - style WP,
+ * dan situs ber - tema MangaThemesia(banyak scanlator Indonesia memakai tema ini).
  * Domain scanlator sering berpindah; daftar di SOURCE_ORDER bisa disesuaikan.
  */
 import cheerio from "cheerio-without-node-native";
@@ -20,28 +20,12 @@ export const SOURCE_ORDER = [
   "BacaKomik",
   "Komik Station",
   "ManhwaDesu",
-  "Komiku",
   "MangaDex (JSON API)",
   "MangaDex (Bahasa Indonesia)",
   "Bato.to (ID)",
 ];
 
-const BATO_DOMAINS = ["https://xbato.co.uk", "https://bato.to"];
-
-async function batoTryDomains(path) {
-  let lastErr = "Unknown error";
-  for (const domain of BATO_DOMAINS) {
-    try {
-      const url = path.startsWith("http") ? path : `${domain}${path}`;
-      const res = await safeFetch(url, { headers: HEADERS });
-      if (res.ok) return { html: await res.text(), base: domain, url };
-      lastErr = `HTTP ${res.status}`;
-    } catch (e) {
-      lastErr = e.message || e;
-    }
-  }
-  throw new Error(`Bato failed. Last error: ${lastErr}`);
-}
+const BATO_BASE = "https://bato.to";
 
 async function safeFetch(url, options = {}, timeoutMs = 25000) {
   const controller = new AbortController();
@@ -174,138 +158,7 @@ export function sourceShortLabel(sourceKey) {
   if (sourceKey === "ManhwaDesu") return "M.Desu";
   if (sourceKey === "BacaKomik") return "Baca";
   if (sourceKey === "Komikindo") return "Komikindo";
-  if (sourceKey === "Komiku") return "Komiku";
   return sourceKey.length > 14 ? `${sourceKey.slice(0, 12)}…` : sourceKey;
-}
-
-// --- Komiku ---
-const KOMIKU_DOMAINS = ["https://komiku.org", "https://komiku.id"];
-
-async function komikuTryDomains(path) {
-  let lastErr = "Unknown error";
-  for (const domain of KOMIKU_DOMAINS) {
-    try {
-      const url = path.startsWith("http") ? path : `${domain}${path}`;
-      const res = await safeFetch(url, { headers: HEADERS });
-      if (res.ok) return { html: await res.text(), base: domain };
-      lastErr = `HTTP ${res.status}`;
-    } catch (e) {
-      lastErr = e.message || e;
-    }
-  }
-  throw new Error(`Komiku failed. Last error: ${lastErr}`);
-}
-
-async function komikuLatest() {
-  const { html, base } = await komikuTryDomains("/");
-  const $ = cheerio.load(html);
-  const results = [];
-  $(".ls4, .ls4w, .bima, .ls2, .ls2j").each((_, el) => {
-    const title = $(el).find("h3 a, h4 a, .kan a").first().text().trim();
-    const url = $(el).find("h3 a, h4 a, .kan a, a").first().attr("href");
-    const imgEl = $(el).find("img").first();
-    const image = imgEl.attr("data-src") || imgEl.attr("src");
-    if (title && url)
-      results.push({
-        title,
-        image: absUrl(base, image),
-        url: absUrl(base, url),
-        source: "Komiku",
-      });
-  });
-  // Filter out duplicates
-  const seen = new Set();
-  return results.filter((r) => {
-    if (seen.has(r.url)) return false;
-    seen.add(r.url);
-    return true;
-  });
-}
-
-async function komikuSearch(query) {
-  const { html, base } = await komikuTryDomains(
-    `/?post_type=manga&s=${encodeURIComponent(query)}`,
-  );
-  const $ = cheerio.load(html);
-  const results = [];
-  $(".bima").each((_, el) => {
-    const title = $(el).find("h3 a, h4 a, .kan a").first().text().trim();
-    const url = $(el).find("h3 a, h4 a, .kan a, a").first().attr("href");
-    const imgEl = $(el).find("img").first();
-    const image = imgEl.attr("data-src") || imgEl.attr("src");
-    if (title && url)
-      results.push({
-        title,
-        image: absUrl(base, image),
-        url: absUrl(base, url),
-        source: "Komiku",
-      });
-  });
-  if (results.length > 0) return results;
-
-  // fallback if .bima not found
-  $(".ls4, .ls4w, .ls2, .ls2j").each((_, el) => {
-    const title = $(el).find("h3 a, h4 a, .kan a").first().text().trim();
-    const url = $(el).find("h3 a, h4 a, .kan a, a").first().attr("href");
-    const imgEl = $(el).find("img").first();
-    const image = imgEl.attr("data-src") || imgEl.attr("src");
-    if (title && url)
-      results.push({
-        title,
-        image: absUrl(base, image),
-        url: absUrl(base, url),
-        source: "Komiku",
-      });
-  });
-  return results;
-}
-
-async function komikuDetails(url) {
-  const { html } = await komikuTryDomains(url);
-  const $ = cheerio.load(html);
-  const title = $("#Judul h1").text().trim() || $("h1").first().text().trim();
-  const imgEl = $(".ims img").first();
-  const image = imgEl.attr("data-src") || imgEl.attr("src") || "";
-  const description =
-    $("p.desc").text().trim() || $("#Sinopsis p, .desc p").text().trim();
-  const chapters = [];
-  $("#Chapter tbody tr").each((_, el) => {
-    const a = $(el).find("td.judulseries a").first();
-    const name = a.text().trim();
-    const href = a.attr("href");
-    if (name && href) chapters.push({ name, url: absUrl(url, href) });
-  });
-  // fallback if structure differs
-  if (chapters.length === 0) {
-    $(".bxcl li, #chapter_list li").each((_, el) => {
-      const a = $(el).find("a").first();
-      const name = a.text().trim();
-      const href = a.attr("href");
-      if (name && href) chapters.push({ name, url: absUrl(url, href) });
-    });
-  }
-  return { title, image: absUrl(url, image), description, chapters };
-}
-
-async function komikuImages(chapterUrl) {
-  const { html } = await komikuTryDomains(chapterUrl);
-  const $ = cheerio.load(html);
-  const images = [];
-  $("#Baca_Komik img").each((_, el) => {
-    const u =
-      imgAttr($, el) || $(el).attr("data-src") || $(el).attr("src") || "";
-    if (u) images.push(u);
-  });
-  if (images.length === 0) {
-    $(".chapter-image img, .chapter-content img, .reader-area img").each(
-      (_, el) => {
-        const u =
-          imgAttr($, el) || $(el).attr("data-src") || $(el).attr("src") || "";
-        if (u) images.push(u);
-      },
-    );
-  }
-  return images.map((u) => absUrl(chapterUrl, u));
 }
 
 // --- Komikindo (animepost + #chimg-auh) ---
@@ -401,6 +254,7 @@ async function komikindoImages(chapterUrl) {
   const images = [];
   // Try multiple selectors in order
   const selectors = [
+    "#anjay_ini_id_kh img",
     "#chimg-auh img",
     "#anjay_kuproy img",
     "#chimg img",
@@ -547,6 +401,7 @@ async function bacakomikImages(chapterUrl) {
   const images = [];
   // Try multiple selectors
   const selectors = [
+    "#anjay_ini_id_kh img",
     "div#chimg-auh img",
     'div:has(> img[alt*="Chapter"]) img',
     "#anjay_kuproy img",
@@ -751,6 +606,7 @@ async function mtImages(chapterUrl) {
   const images = [];
   // Try multiple selectors
   const selectors = [
+    "#anjay_ini_id_kh img",
     "div#readerarea img",
     "div.reader-area img",
     "div.chapter-content img",
@@ -886,20 +742,24 @@ async function mdImages(chapterId) {
 
 // --- Bato.to (Indonesian catalog) ---
 async function batoLatest() {
-  const { html, base } = await batoTryDomains(
-    `/browse?langs=id&sort=update&page=1`,
-  );
-  return batoParseBrowse(html, "Bato.to (ID)", base);
+  const url = `${BATO_BASE}/browse?langs=id&sort=update&page=1`;
+  const res = await safeFetch(url, {
+    headers: HEADERS,
+  });
+  const html = await res.text();
+  return batoParseBrowse(html, "Bato.to (ID)");
 }
 
 async function batoSearch(query) {
-  const { html, base } = await batoTryDomains(
-    `/search?word=${encodeURIComponent(query)}&page=1`,
-  );
-  return batoParseBrowse(html, "Bato.to (ID)", base);
+  const u = `${BATO_BASE}/search?word=${encodeURIComponent(query)}&page=1`;
+  const res = await safeFetch(u, {
+    headers: HEADERS,
+  });
+  const html = await res.text();
+  return batoParseBrowse(html, "Bato.to (ID)");
 }
 
-function batoParseBrowse(html, sourceKey, baseForAbs) {
+function batoParseBrowse(html, sourceKey) {
   const $ = cheerio.load(html);
   const results = [];
   let cols = $("#series-list div.col").filter(
@@ -919,8 +779,8 @@ function batoParseBrowse(html, sourceKey, baseForAbs) {
     if (title && href) {
       results.push({
         title,
-        image: absUrl(baseForAbs, img),
-        url: absUrl(baseForAbs, href),
+        image: absUrl(BATO_BASE, img),
+        url: absUrl(BATO_BASE, href),
         source: sourceKey,
       });
     }
@@ -929,7 +789,10 @@ function batoParseBrowse(html, sourceKey, baseForAbs) {
 }
 
 async function batoDetails(pageUrl) {
-  const { html } = await batoTryDomains(pageUrl);
+  const res = await safeFetch(pageUrl, {
+    headers: HEADERS,
+  });
+  const html = await res.text();
   const $ = cheerio.load(html);
   const info = $("div#mainer div.container-fluid").first();
   const title = info.find("h3").first().text().trim();
@@ -952,7 +815,10 @@ async function batoDetails(pageUrl) {
 }
 
 async function batoImages(chapterUrl) {
-  const { html } = await batoTryDomains(chapterUrl);
+  const res = await safeFetch(chapterUrl, {
+    headers: HEADERS,
+  });
+  const html = await res.text();
   // #region agent log
   debugLog(
     "scrapers.js:batoImages",
@@ -1070,8 +936,6 @@ function dispatchLatest(source) {
       return mtLatest(source);
     case "ManhwaDesu":
       return mtLatest(source);
-    case "Komiku":
-      return komikuLatest();
     case "MangaDex (JSON API)":
       return mdLatest("en");
     case "MangaDex (Bahasa Indonesia)":
@@ -1093,8 +957,6 @@ function dispatchSearch(source, query) {
       return mtSearch(source, query);
     case "ManhwaDesu":
       return mtSearch(source, query);
-    case "Komiku":
-      return komikuSearch(query);
     case "MangaDex (JSON API)":
       return mdSearch("en", query);
     case "MangaDex (Bahasa Indonesia)":
@@ -1115,8 +977,6 @@ function dispatchDetails(source, url) {
     case "Komik Station":
     case "ManhwaDesu":
       return mtDetails(url);
-    case "Komiku":
-      return komikuDetails(url);
     case "MangaDex (JSON API)":
       return mdDetails("en", url);
     case "MangaDex (Bahasa Indonesia)":
@@ -1142,8 +1002,6 @@ function dispatchImages(source, chapterUrl) {
     case "Komik Station":
     case "ManhwaDesu":
       return mtImages(chapterUrl);
-    case "Komiku":
-      return komikuImages(chapterUrl);
     case "MangaDex (JSON API)":
     case "MangaDex (Bahasa Indonesia)":
       return mdImages(chapterUrl);
