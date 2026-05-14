@@ -44,11 +44,11 @@ async function safeFetch(url, options = {}, timeoutMs = 25000) {
     // Hati-hati, tidak semua proxy mendukung Cloudflare (seperti bato/mangadex),
     // tapi ini sangat efektif untuk Komikindo/MangaThemesia
     const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
-    
+
     const proxyController = new AbortController();
     const proxyId = setTimeout(() => proxyController.abort(), timeoutMs);
     const proxyOptions = { ...options, signal: proxyController.signal };
-    
+
     try {
       const proxyRes = await fetch(proxyUrl, proxyOptions);
       clearTimeout(proxyId);
@@ -177,7 +177,6 @@ async function komikindoTryDomains(path) {
       const url = path.startsWith("http") ? path : `${domain}${path}`;
       const res = await safeFetch(url, {
         headers: HEADERS,
-        signal: AbortSignal.timeout(20000),
       });
       if (res.ok) return { html: await res.text(), base: domain };
       lastErr = `HTTP ${res.status}`;
@@ -322,7 +321,6 @@ async function bacakomikTryDomains(path) {
       const url = path.startsWith("http") ? path : `${domain}${path}`;
       const res = await safeFetch(url, {
         headers: HEADERS,
-        signal: AbortSignal.timeout(20000),
       });
       if (res.ok) return { html: await res.text(), base: domain };
       lastErr = `HTTP ${res.status}`;
@@ -471,7 +469,6 @@ async function mtTryDomains(domains, path) {
       const url = path.startsWith("http") ? path : `${domain}${path}`;
       const res = await safeFetch(url, {
         headers: HEADERS,
-        signal: AbortSignal.timeout(20000),
       });
       if (res.ok) return { html: await res.text(), base: domain };
     } catch (e) {
@@ -500,7 +497,6 @@ async function mtLatest(sourceKey) {
       const url = mtBuildListUrl(domain, mangaDir, 1, "update", "");
       const res = await safeFetch(url, {
         headers: HEADERS,
-        signal: AbortSignal.timeout(20000),
       });
       if (res.ok) {
         const html = await res.text();
@@ -522,7 +518,6 @@ async function mtSearch(sourceKey, query) {
       const url = mtBuildListUrl(domain, mangaDir, 1, "", query);
       const res = await safeFetch(url, {
         headers: HEADERS,
-        signal: AbortSignal.timeout(20000),
       });
       if (res.ok) {
         const html = await res.text();
@@ -561,7 +556,6 @@ function mtParseListing(html, baseUrl, sourceKey) {
 async function mtDetails(url) {
   const res = await safeFetch(url, {
     headers: HEADERS,
-    signal: AbortSignal.timeout(25000),
   });
   const html = await res.text();
   const $ = cheerio.load(html);
@@ -604,7 +598,6 @@ async function mtDetails(url) {
 async function mtImages(chapterUrl) {
   const res = await safeFetch(chapterUrl, {
     headers: HEADERS,
-    signal: AbortSignal.timeout(25000),
   });
   const html = await res.text();
   const $ = cheerio.load(html);
@@ -669,7 +662,6 @@ async function mdLatest(lang) {
       : "limit=20&contentRating[]=safe&includes[]=cover_art";
   const res = await safeFetch(`https://api.mangadex.org/manga?${q}`, {
     headers: HEADERS,
-    signal: AbortSignal.timeout(25000),
   });
   const json = await res.json();
   const src =
@@ -750,7 +742,6 @@ async function batoLatest() {
   const url = `${BATO_BASE}/browse?langs=id&sort=update&page=1`;
   const res = await safeFetch(url, {
     headers: HEADERS,
-    signal: AbortSignal.timeout(25000),
   });
   const html = await res.text();
   return batoParseBrowse(html, "Bato.to (ID)");
@@ -760,7 +751,6 @@ async function batoSearch(query) {
   const u = `${BATO_BASE}/search?word=${encodeURIComponent(query)}&page=1`;
   const res = await safeFetch(u, {
     headers: HEADERS,
-    signal: AbortSignal.timeout(25000),
   });
   const html = await res.text();
   return batoParseBrowse(html, "Bato.to (ID)");
@@ -798,7 +788,6 @@ function batoParseBrowse(html, sourceKey) {
 async function batoDetails(pageUrl) {
   const res = await safeFetch(pageUrl, {
     headers: HEADERS,
-    signal: AbortSignal.timeout(25000),
   });
   const html = await res.text();
   const $ = cheerio.load(html);
@@ -825,7 +814,6 @@ async function batoDetails(pageUrl) {
 async function batoImages(chapterUrl) {
   const res = await safeFetch(chapterUrl, {
     headers: HEADERS,
-    signal: AbortSignal.timeout(30000),
   });
   const html = await res.text();
   // #region agent log
