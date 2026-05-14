@@ -48,18 +48,33 @@ async function safeFetch(url, options = {}, timeoutMs = 25000) {
   const id = setTimeout(() => controller.abort(), timeoutMs);
   const fetchOptions = { ...options, signal: controller.signal };
 
+  // Helper for actual fetch call with retry
+  const fetchWithRetry = async (targetUrl, opts, maxRetries = 1) => {
+    for (let i = 0; i <= maxRetries; i++) {
+      try {
+        const res = await fetch(targetUrl, opts);
+        if (res.ok) return res;
+        if (i === maxRetries) throw new Error(`HTTP ${res.status}`);
+      } catch (err) {
+        if (i === maxRetries) throw err;
+        await new Promise((r) => setTimeout(r, 1000)); // wait before retry
+      }
+    }
+  };
+
   try {
-    const res = await fetch(url, fetchOptions);
+    const res = await fetchWithRetry(url, fetchOptions);
     clearTimeout(id);
-    if (res.ok) return res;
-    throw new Error(`HTTP ${res.status}`);
+    return res;
   } catch (err) {
     clearTimeout(id);
 
-    // List of proxies to try if direct fetch fails (often due to ISP block)
+    // List of robust proxies to try if direct fetch fails
     const proxies = [
       `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(url)}`,
       `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+      `https://thingproxy.freeboard.io/fetch/${url}`,
+      `https://yacdn.org/proxy/${url}`,
     ];
 
     for (const proxyUrl of proxies) {
@@ -158,16 +173,78 @@ function extractBatoScript(html) {
 
 function imgAttr($, el) {
   const $el = $(el);
-  const raw =
-    $el.attr("data-lazy-src") ||
-    $el.attr("data-original-src") ||
+  return (
     $el.attr("data-src") ||
+    $el.attr("data-lazy-src") ||
+    $el.attr("data-original") ||
+    $el.attr("data-original-src") ||
     $el.attr("data-cfsrc") ||
     $el.attr("src") ||
-    "";
-  const t = String(raw).trim();
-  if (!t || t.startsWith("data:")) return "";
-  return t;
+    ""
+  ).trim();
+}
+
+/** 
+ * Sistem Backup: Pencarian gambar chapter secara agresif jika selektor standar gagal.
+ */
+function findChapterImages($, chapterUrl) {
+  const images = [];
+  const selectors = [
+    "#anjay_ini_id_kh img",
+    "div#readerarea img",
+    "div.reader-area img",
+    "div.chapter-content img",
+    ".chapter-image img",
+    "div#chimg-auh img",
+    "#anjay_kuproy img",
+    "#chimg img",
+    ".img-landmine img",
+    "#Baca_Komik img",
+  ];
+
+  for (const sel of selectors) {
+    $(sel).each((_, el) => {
+      const $el = $(el);
+      let u = imgAttr($, el);
+      
+      // Khusus BacaKomik/MangaThemesia: Jika src kosong, cek onError
+      if (!u) {
+        const onErr = $el.attr("onerror") || $el.attr("onError") || "";
+        const m = onErr.match(/src=['"]([^'"]+)['"]/);
+        if (m) u = m[1];
+      }
+      
+      if (u && !images.includes(u)) images.push(u);
+    });
+    if (images.length > 5) break; 
+  }
+
+  // Backup: Jika selektor ID gagal, cari gambar apapun yang punya 'chapter' atau 'halaman'
+  if (images.length === 0) {
+    $("img").each((_, el) => {
+      const u = imgAttr($, el);
+      const alt = ($(el).attr("alt") || "").toLowerCase();
+      const cls = ($(el).attr("class") || "").toLowerCase();
+      if (u && (alt.includes("chapter") || alt.includes("page") || alt.includes("halaman") || cls.includes("wp-image"))) {
+        if (!images.includes(u)) images.push(u);
+      }
+    });
+  }
+
+  // Final Backup: Regex pencarian URL gambar langsung dari HTML
+  if (images.length === 0) {
+    const htmlText = $.html();
+    const imgRegex = /https?:\/\/[^"'\s]+\.(jpg|jpeg|png|webp|gif)(\?[^"'\s]*)?/gi;
+    const matches = htmlText.match(imgRegex);
+    if (matches) {
+      const filtered = matches.filter(u => 
+        !u.includes("avatar") && !u.includes("icon") && !u.includes("logo") && !u.includes("banner")
+      );
+      images.push(...filtered);
+    }
+  }
+
+  return [...new Set(images)].map((u) => absUrl(chapterUrl, u)).filter(u => u.startsWith('http'));
 }
 
 export function sourceShortLabel(sourceKey) {
@@ -291,22 +368,7 @@ async function komikuDetails(url) {
 async function komikuImages(chapterUrl) {
   const { html } = await komikuTryDomains(chapterUrl);
   const $ = cheerio.load(html);
-  const images = [];
-  $("#Baca_Komik img").each((_, el) => {
-    const u =
-      imgAttr($, el) || $(el).attr("data-src") || $(el).attr("src") || "";
-    if (u) images.push(u);
-  });
-  if (images.length === 0) {
-    $(".chapter-image img, .chapter-content img, .reader-area img").each(
-      (_, el) => {
-        const u =
-          imgAttr($, el) || $(el).attr("data-src") || $(el).attr("src") || "";
-        if (u) images.push(u);
-      },
-    );
-  }
-  return images.map((u) => absUrl(chapterUrl, u));
+  return findChapterImages($, chapterUrl);
 }
 
 // --- Komikindo (animepost + #chimg-auh) ---
@@ -399,59 +461,7 @@ async function komikindoDetails(url) {
 async function komikindoImages(chapterUrl) {
   const { html } = await komikindoTryDomains(chapterUrl);
   const $ = cheerio.load(html);
-  const images = [];
-  // Try multiple selectors in order
-  const selectors = [
-    "#anjay_ini_id_kh img",
-    "#chimg-auh img",
-    "#anjay_kuproy img",
-    "#chimg img",
-    ".img-landmine img",
-    ".chapter-image img",
-    "div.reader-area img",
-    "div.chapter-content img",
-    'img[src*="komikindo"]',
-  ];
-  for (const sel of selectors) {
-    $(sel).each((_, el) => {
-      const s =
-        $(el).attr("src") ||
-        $(el).attr("data-src") ||
-        $(el).attr("data-lazy-src") ||
-        "";
-      if (s && !images.includes(s)) images.push(s);
-    });
-    if (images.length > 0) break;
-  }
-  // If still no images, try parsing JSON embedded in script tags
-  if (images.length === 0) {
-    const htmlText = $.html();
-    const m = htmlText.match(/"images"\s*:\s*(\[[\s\S]*?\])\s*[,}]/);
-    if (m) {
-      try {
-        const arr = JSON.parse(m[1]);
-        if (Array.isArray(arr))
-          return arr.map((u) => absUrl(chapterUrl, String(u)));
-      } catch (e) {
-        /* ignore */
-      }
-    }
-    // Try to find any image URLs in the page
-    const imgRegex =
-      /https?:\/\/[^"'\s]+\.(jpg|jpeg|png|webp|gif)(\?[^"'\s]*)?/gi;
-    const matches = htmlText.match(imgRegex);
-    if (matches) {
-      // Filter out small icons and common non-chapter images
-      return matches.filter(
-        (u) =>
-          !u.includes("avatar") &&
-          !u.includes("icon") &&
-          !u.includes("logo") &&
-          !u.includes("banner"),
-      );
-    }
-  }
-  return images;
+  return findChapterImages($, chapterUrl);
 }
 
 // --- BacaKomik (animepost + reader onError / chapter imgs) ---
@@ -546,49 +556,7 @@ async function bacakomikDetails(url) {
 async function bacakomikImages(chapterUrl) {
   const { html } = await bacakomikTryDomains(chapterUrl);
   const $ = cheerio.load(html);
-  const images = [];
-  // Try multiple selectors
-  const selectors = [
-    "#anjay_ini_id_kh img",
-    "div#chimg-auh img",
-    'div:has(> img[alt*="Chapter"]) img',
-    "#anjay_kuproy img",
-    "#chimg img",
-    ".img-landmine img",
-    ".chapter-image img",
-    "div.reader-area img",
-    "div.chapter-content img",
-  ];
-  for (const sel of selectors) {
-    $(sel).each((_, el) => {
-      const $el = $(el);
-      let u = imgAttr($, el);
-      if (!u) {
-        const onErr = $el.attr("onerror") || $el.attr("onError") || "";
-        const m = onErr.match(/src=['"]([^'"]+)['"]/);
-        if (m) u = m[1];
-      }
-      if (u) images.push(absUrl(chapterUrl, u));
-    });
-    if (images.length > 0) break;
-  }
-  // Fallback: regex for image URLs
-  if (images.length === 0) {
-    const htmlText = $.html();
-    const imgRegex =
-      /https?:\/\/[^"'\s]+\.(jpg|jpeg|png|webp|gif)(\?[^"'\s]*)?/gi;
-    const matches = htmlText.match(imgRegex);
-    if (matches) {
-      return matches.filter(
-        (u) =>
-          !u.includes("avatar") &&
-          !u.includes("icon") &&
-          !u.includes("logo") &&
-          !u.includes("banner"),
-      );
-    }
-  }
-  return images.filter(Boolean);
+  return findChapterImages($, chapterUrl);
 }
 
 // --- MangaThemesia (reader #readerarea) ---
@@ -751,58 +719,7 @@ async function mtImages(chapterUrl) {
   });
   const html = await res.text();
   const $ = cheerio.load(html);
-  const images = [];
-  // Try multiple selectors
-  const selectors = [
-    "#anjay_ini_id_kh img",
-    "div#readerarea img",
-    "div.reader-area img",
-    "div.chapter-content img",
-    ".chapter-image img",
-    "div#chimg-auh img",
-    "#anjay_kuproy img",
-    "#chimg img",
-    ".img-landmine img",
-  ];
-  for (const sel of selectors) {
-    $(sel)
-      .filter((_, el) => {
-        const name = (el.tagName || "").toLowerCase();
-        if (name === "noscript") return false;
-        return true;
-      })
-      .each((_, el) => {
-        const u = imgAttr($, el);
-        if (u && !images.includes(u)) images.push(absUrl(chapterUrl, u));
-      });
-    if (images.length > 0) break;
-  }
-  if (images.length > 0) return images;
-  // Try JSON embedded in script tags
-  const m = html.match(/"images"\s*:\s*(\[[\s\S]*?\])\s*[,}]/);
-  if (m) {
-    try {
-      const arr = JSON.parse(m[1]);
-      if (Array.isArray(arr))
-        return arr.map((u) => absUrl(chapterUrl, String(u)));
-    } catch {
-      /* ignore */
-    }
-  }
-  // Fallback: regex for image URLs
-  const imgRegex =
-    /https?:\/\/[^"'\s]+\.(jpg|jpeg|png|webp|gif)(\?[^"'\s]*)?/gi;
-  const matches = html.match(imgRegex);
-  if (matches) {
-    return matches.filter(
-      (u) =>
-        !u.includes("avatar") &&
-        !u.includes("icon") &&
-        !u.includes("logo") &&
-        !u.includes("banner"),
-    );
-  }
-  return [];
+  return findChapterImages($, chapterUrl);
 }
 
 // --- MangaDex ---
