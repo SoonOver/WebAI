@@ -784,7 +784,7 @@ function ReaderScreen({ route, navigation }) {
       } else if (errMsg.includes('script missing')) {
         userMessage = `Bato.to anti-scraping protection blocked this chapter. Try MangaDex instead.`;
       }
-      Alert.alert('Error', userMessage);
+      Alert.alert('Error', `${userMessage}\n\n[Log: ${errMsg}]`);
     }
     setLoading(false);
   };
