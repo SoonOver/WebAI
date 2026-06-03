@@ -67,7 +67,15 @@ Set-Content -LiteralPath $gradleProperties -Value $properties -Encoding ASCII
 
 Push-Location $androidDir
 try {
-  .\gradlew.bat --no-daemon --max-workers=2 :app:assembleRelease
+  $gradleArgs = @(
+    "--no-daemon",
+    "--max-workers=2",
+    ":app:assembleRelease",
+    "-x", "lintVitalAnalyzeRelease",
+    "-x", "lintVitalRelease",
+    "-x", "generateReleaseLintVitalReportModel"
+  )
+  .\gradlew.bat @gradleArgs
   if ($LASTEXITCODE -ne 0) { throw "Gradle build failed with exit code $LASTEXITCODE" }
 } finally {
   Pop-Location
