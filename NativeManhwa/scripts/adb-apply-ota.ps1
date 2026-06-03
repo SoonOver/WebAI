@@ -2,7 +2,8 @@ param(
   [string]$PackageName = "com.osmium.manhwahub",
   [string]$ActivityName = ".MainActivity",
   [string]$AdbPath = "",
-  [int]$WaitSeconds = 25
+  [int]$WaitSeconds = 25,
+  [int]$LogLineLimit = 500
 )
 
 $ErrorActionPreference = "Stop"
@@ -39,6 +40,30 @@ function Invoke-Adb {
   & $script:ResolvedAdb @Args
 }
 
+function Get-UiDump {
+  Invoke-Adb shell uiautomator dump /sdcard/window.xml | Out-Null
+  return (Invoke-Adb shell cat /sdcard/window.xml) -join ""
+}
+
+function Get-NodeCenterFromBounds {
+  param([string]$XmlText, [string]$NodeText)
+
+  $escapedText = [regex]::Escape($NodeText)
+  $nodeMatch = [regex]::Match($XmlText, "text=`"$escapedText`"[^>]*bounds=`"\[(\d+),(\d+)\]\[(\d+),(\d+)\]`"")
+  if (-not $nodeMatch.Success) {
+    $nodeMatch = [regex]::Match($XmlText, "content-desc=`"$escapedText`"[^>]*bounds=`"\[(\d+),(\d+)\]\[(\d+),(\d+)\]`"")
+  }
+
+  if (-not $nodeMatch.Success) {
+    return $null
+  }
+
+  return @{
+    X = [int](([int]$nodeMatch.Groups[1].Value + [int]$nodeMatch.Groups[3].Value) / 2)
+    Y = [int](([int]$nodeMatch.Groups[2].Value + [int]$nodeMatch.Groups[4].Value) / 2)
+  }
+}
+
 $script:ResolvedAdb = Find-Adb
 Write-Host "Using ADB: $script:ResolvedAdb"
 
@@ -60,26 +85,29 @@ Invoke-Adb shell am start -n "$PackageName/$ActivityName" | Out-Null
 Write-Host "Launched $PackageName. Waiting $WaitSeconds seconds for OTA check..."
 Start-Sleep -Seconds $WaitSeconds
 
-Invoke-Adb shell uiautomator dump /sdcard/window.xml | Out-Null
-$windowXml = Invoke-Adb shell cat /sdcard/window.xml
+$windowXml = Get-UiDump
 $hasUpdateDialog = ($windowXml | Select-String -SimpleMatch 'Update ready') -and
   ($windowXml | Select-String -SimpleMatch 'RESTART')
 
 if ($hasUpdateDialog) {
   Write-Host "Update dialog found. Restarting app..."
-  Invoke-Adb shell input tap 880 1360 | Out-Null
+  $restartCenter = Get-NodeCenterFromBounds -XmlText $windowXml -NodeText "RESTART"
+  if ($restartCenter) {
+    Invoke-Adb shell input tap $restartCenter.X $restartCenter.Y | Out-Null
+  } else {
+    Invoke-Adb shell input tap 880 1360 | Out-Null
+  }
   Start-Sleep -Seconds 12
 } else {
   Write-Host "No update dialog found. App may already be current."
 }
 
-Invoke-Adb shell uiautomator dump /sdcard/window.xml | Out-Null
-$afterXml = Invoke-Adb shell cat /sdcard/window.xml
+$afterXml = Get-UiDump
 $hasAppUi = ($afterXml | Select-String -SimpleMatch 'Discover') -or
   ($afterXml | Select-String -SimpleMatch 'Settings') -or
   ($afterXml | Select-String -SimpleMatch 'Search')
 
-$crashes = Invoke-Adb logcat -d -v time |
+$crashes = Invoke-Adb logcat -d -v time -t $LogLineLimit |
   Select-String -Pattern 'FATAL EXCEPTION|ReactNativeJS.*Error|JSApplicationIllegalArgumentException|JavascriptException' |
   Select-Object -Last 20
 
