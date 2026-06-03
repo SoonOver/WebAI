@@ -803,6 +803,22 @@ function firstUsableCoverImage($, root, baseUrl) {
   return images[0] || "";
 }
 
+function normalizeChapterImages(images = [], chapterUrl) {
+  const absoluteImages = [...new Set(
+    images
+      .map((image) => absUrl(chapterUrl, image))
+      .filter((image) => image && image.startsWith("http"))
+  )];
+  const hasNonGifPage = absoluteImages.some((image) => !/\.gif(?:[?#].*)?$/i.test(image));
+
+  return absoluteImages.filter((image) => {
+    const lower = image.toLowerCase();
+    if (isLikelyNonCoverImage(lower)) return false;
+    if (hasNonGifPage && /\.gif(?:[?#].*)?$/i.test(lower)) return false;
+    return !/(?:^|[\/_.-])(?:ads?|advert|adserver|adservice|banner|casino|slot|jackpot|sponsor|promo)(?:[\/_.-]|$)/.test(lower);
+  });
+}
+
 /** 
  * Sistem Backup: Pencarian gambar chapter secara agresif jika selektor standar gagal.
  */
@@ -863,7 +879,7 @@ function findChapterImages($, chapterUrl) {
     }
   }
 
-  return [...new Set(images)].map((u) => absUrl(chapterUrl, u)).filter(u => u.startsWith('http'));
+  return normalizeChapterImages(images, chapterUrl);
 }
 
 export function sourceShortLabel(sourceKey) {
@@ -1768,25 +1784,14 @@ async function batoImages(chapterUrl) {
     }
   });
   if (images.length > 0) {
-    return [...new Set(images)]
-      .map((u) => absUrl(chapterUrl, u))
-      .filter((u) => u.startsWith("http"));
+    return normalizeChapterImages(images, chapterUrl);
   }
   // Fallback: regex on HTML
   const imgRegex =
     /https?:\/\/[^"'\s]+\.(jpg|jpeg|png|webp|gif)(\?[^"'\s]*)?/gi;
   const matches = html.match(imgRegex);
   if (matches) {
-    return [...new Set(matches)]
-      .filter(
-        (u) =>
-          !u.includes("avatar") &&
-          !u.includes("icon") &&
-          !u.includes("logo") &&
-          !u.includes("banner"),
-      )
-      .map((u) => absUrl(chapterUrl, u))
-      .filter((u) => u.startsWith("http"));
+    return normalizeChapterImages(matches, chapterUrl);
   }
   return [];
 }
@@ -1940,9 +1945,10 @@ async function manhwareadImages(chapterUrl) {
       const pages = JSON.parse(decoded);
       const imgBase = (chapterDataRaw.base || "").replace(/\/+$/, "");
       if (Array.isArray(pages)) {
-        return pages
-          .map((p) => (p?.src ? `${imgBase}/${p.src}` : ""))
-          .filter((u) => u.startsWith("http"));
+        return normalizeChapterImages(
+          pages.map((p) => (p?.src ? `${imgBase}/${p.src}` : "")),
+          chapterUrl,
+        );
       }
     } catch {
       // Fall through to generic image extraction.
