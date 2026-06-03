@@ -3,30 +3,273 @@
  * dan situs ber - tema MangaThemesia(banyak scanlator Indonesia memakai tema ini).
  * Domain scanlator sering berpindah; daftar di SOURCE_ORDER bisa disesuaikan.
  */
-import cheerio from "cheerio-without-node-native";
+import { parse } from "node-html-parser";
 import CryptoJS from "crypto-js";
-import { debugLog } from "./debugLog";
 
 export const HEADERS = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  Accept:
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
 };
 
 /** @typedef {{ key: string, engine: string, baseUrl?: string, mangaDir?: string, siteLang?: string, mdLang?: string }} SourceDef */
 
 /** Urutan tab sumber; tambah/ubah entri MangaThemesia sesuai domain yang masih aktif. */
+export const ALL_ID_SOURCE = "Semua Provider ID";
+
 export const SOURCE_ORDER = [
   "Komikindo",
   "BacaKomik",
   "Komik Station",
-  "ManhwaDesu",
   "Komiku",
+  "ManhwaRead",
   "MangaDex (JSON API)",
   "MangaDex (Bahasa Indonesia)",
   "Bato.to (ID)",
 ];
 
-const BATO_DOMAINS = ["https://xbato.co.uk", "https://bato.to"];
+export const ID_SOURCE_ORDER = [
+  "Komikindo",
+  "BacaKomik",
+  "Komik Station",
+  "Komiku",
+  "MangaDex (Bahasa Indonesia)",
+  "Bato.to (ID)",
+];
+
+export const SOURCE_PICKER_ORDER = [
+  ALL_ID_SOURCE,
+  ...SOURCE_ORDER,
+];
+
+export const WEB_SOURCE_ORDER = [
+  "MangaDex (JSON API)",
+  "MangaDex (Bahasa Indonesia)",
+];
+
+export const FILTER_SORTS = [
+  { key: "updated", label: "Updated" },
+  { key: "popular", label: "Popular" },
+  { key: "title", label: "Title" },
+];
+
+export const FILTER_TYPES = [
+  { key: "all", label: "All" },
+  { key: "manga", label: "Manga" },
+  { key: "manhwa", label: "Manhwa" },
+  { key: "manhua", label: "Manhua" },
+];
+
+export const FILTER_STATUSES = [
+  { key: "all", label: "All" },
+  { key: "ongoing", label: "Ongoing" },
+  { key: "completed", label: "Completed" },
+];
+
+export const FILTER_GENRES = [
+  { key: "all", label: "All" },
+  { key: "action", label: "Action" },
+  { key: "adventure", label: "Adventure" },
+  { key: "comedy", label: "Comedy" },
+  { key: "drama", label: "Drama" },
+  { key: "fantasy", label: "Fantasy" },
+  { key: "romance", label: "Romance" },
+  { key: "isekai", label: "Isekai" },
+  { key: "school_life", label: "School Life" },
+  { key: "slice_of_life", label: "Slice of Life" },
+  { key: "horror", label: "Horror" },
+  { key: "supernatural", label: "Supernatural" },
+];
+
+export const FILTER_RATINGS = [
+  { key: "safe", label: "Safe" },
+  { key: "suggestive", label: "Safe+" },
+  { key: "all", label: "All" },
+];
+
+const FILTER_GROUPS = {
+  sort: { label: "Sort", options: FILTER_SORTS },
+  type: { label: "Type", options: FILTER_TYPES },
+  status: { label: "Status", options: FILTER_STATUSES },
+  genre: { label: "Genre", options: FILTER_GENRES },
+  contentRating: { label: "Rating", options: FILTER_RATINGS },
+};
+
+const SOURCE_FILTER_SUPPORT = {
+  [ALL_ID_SOURCE]: ["sort", "type", "status", "genre", "contentRating"],
+  BacaKomik: ["sort", "type", "status", "genre"],
+  "Komik Station": ["sort", "type", "status", "genre"],
+  "MangaDex (JSON API)": ["sort", "type", "status", "genre", "contentRating"],
+  "MangaDex (Bahasa Indonesia)": ["sort", "type", "status", "genre", "contentRating"],
+};
+
+const DEFAULT_FILTERS = {
+  sort: "updated",
+  type: "all",
+  status: "all",
+  genre: "all",
+  contentRating: "safe",
+};
+
+function isFilterOption(group, key) {
+  return FILTER_GROUPS[group]?.options.some((option) => option.key === key);
+}
+
+export function getCatalogFilterGroups(source) {
+  const groups = SOURCE_FILTER_SUPPORT[source] || [];
+  return groups
+    .map((group) => FILTER_GROUPS[group] ? { key: group, ...FILTER_GROUPS[group] } : null)
+    .filter(Boolean);
+}
+
+export function sanitizeCatalogFilters(source, filters = {}) {
+  const groups = new Set(SOURCE_FILTER_SUPPORT[source] || []);
+  const next = { ...DEFAULT_FILTERS };
+  for (const key of Object.keys(DEFAULT_FILTERS)) {
+    if (!groups.has(key)) continue;
+    const value = filters?.[key];
+    next[key] = isFilterOption(key, value) ? value : DEFAULT_FILTERS[key];
+  }
+  return next;
+}
+
+export function countActiveCatalogFilters(source, filters = {}) {
+  const groups = SOURCE_FILTER_SUPPORT[source] || [];
+  const sanitized = sanitizeCatalogFilters(source, filters);
+  return groups.reduce((count, group) => {
+    const defaultValue = DEFAULT_FILTERS[group];
+    return count + (sanitized[group] !== defaultValue ? 1 : 0);
+  }, 0);
+}
+
+class HtmlSelection {
+  constructor(nodes, query) {
+    this.nodes = nodes.filter(Boolean);
+    this.query = query;
+    this.length = this.nodes.length;
+    this.nodes.forEach((node, index) => {
+      this[index] = node;
+    });
+  }
+
+  attr(name) {
+    const node = this.nodes[0];
+    if (!node || typeof node.getAttribute !== "function") return undefined;
+    const value = node.getAttribute(name);
+    return value == null ? undefined : String(value);
+  }
+
+  text() {
+    return this.nodes
+      .map((node) => {
+        if (typeof node.text === "string") return node.text;
+        if (typeof node.rawText === "string") return node.rawText;
+        return "";
+      })
+      .join("");
+  }
+
+  html() {
+    const node = this.nodes[0];
+    if (!node) return null;
+    return typeof node.innerHTML === "string" ? node.innerHTML : String(node);
+  }
+
+  find(selector) {
+    const found = [];
+    for (const node of this.nodes) {
+      if (typeof node.querySelectorAll === "function") {
+        try {
+          found.push(...node.querySelectorAll(selector));
+        } catch {
+          // Invalid selectors should behave like an empty result.
+        }
+      }
+    }
+    return this.query(found);
+  }
+
+  first() {
+    return this.query(this.nodes[0] ? [this.nodes[0]] : []);
+  }
+
+  each(callback) {
+    this.nodes.forEach((node, index) => callback(index, node));
+    return this;
+  }
+
+  map(callback) {
+    const result = this.nodes
+      .map((node, index) => callback(index, node))
+      .filter((value) => value != null);
+    return {
+      get: () => result,
+      toArray: () => result,
+    };
+  }
+
+  get(index) {
+    return index == null ? this.nodes : this.nodes[index];
+  }
+
+  toArray() {
+    return this.nodes;
+  }
+
+  closest(selector) {
+    const found = [];
+    for (const node of this.nodes) {
+      if (typeof node.closest === "function") {
+        try {
+          const match = node.closest(selector);
+          if (match && !found.includes(match)) found.push(match);
+        } catch {
+          // Invalid selectors should behave like an empty result.
+        }
+      }
+    }
+    return this.query(found);
+  }
+
+  contents() {
+    const children = [];
+    for (const node of this.nodes) {
+      if (Array.isArray(node.childNodes)) children.push(...node.childNodes);
+    }
+    return this.query(children);
+  }
+
+  remove() {
+    this.nodes.forEach((node) => {
+      if (typeof node.remove === "function") node.remove();
+    });
+    return this;
+  }
+}
+
+function loadHtml(html) {
+  const root = parse(String(html || ""));
+  const query = (input) => {
+    if (input instanceof HtmlSelection) return input;
+    if (Array.isArray(input)) return new HtmlSelection(input, query);
+    if (typeof input === "string") {
+      const selector = input.trim();
+      if (!selector) return new HtmlSelection([], query);
+      try {
+        return new HtmlSelection(root.querySelectorAll(selector), query);
+      } catch {
+        return new HtmlSelection([], query);
+      }
+    }
+    return input ? new HtmlSelection([input], query) : new HtmlSelection([], query);
+  };
+  query.html = () => root.toString();
+  query.root = () => new HtmlSelection([root], query);
+  return query;
+}
+
+const BATO_DOMAINS = ["https://bbato.com"];
 
 async function batoTryDomains(path) {
   let lastErr = "Unknown error";
@@ -43,56 +286,29 @@ async function batoTryDomains(path) {
   throw new Error(`Bato failed. Last error: ${lastErr}`);
 }
 
-async function safeFetch(url, options = {}, timeoutMs = 25000) {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeoutMs);
-  const fetchOptions = { ...options, signal: controller.signal };
+async function safeFetch(url, options = {}, timeoutMs = 25000, maxRetries = 1) {
+  let lastError = null;
 
-  // Helper for actual fetch call with retry
-  const fetchWithRetry = async (targetUrl, opts, maxRetries = 1) => {
-    for (let i = 0; i <= maxRetries; i++) {
-      try {
-        const res = await fetch(targetUrl, opts);
-        if (res.ok) return res;
-        if (i === maxRetries) throw new Error(`HTTP ${res.status}`);
-      } catch (err) {
-        if (i === maxRetries) throw err;
-        await new Promise((r) => setTimeout(r, 1000)); // wait before retry
-      }
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const res = await fetch(url, { ...options, signal: controller.signal });
+      if (res.ok) return res;
+      lastError = new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      lastError = err;
+    } finally {
+      clearTimeout(id);
     }
-  };
 
-  try {
-    const res = await fetchWithRetry(url, fetchOptions);
-    clearTimeout(id);
-    return res;
-  } catch (err) {
-    clearTimeout(id);
-
-    // List of robust proxies to try if direct fetch fails
-    const proxies = [
-      `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(url)}`,
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-      `https://thingproxy.freeboard.io/fetch/${url}`,
-      `https://yacdn.org/proxy/${url}`,
-    ];
-
-    for (const proxyUrl of proxies) {
-      const pController = new AbortController();
-      const pId = setTimeout(() => pController.abort(), timeoutMs);
-      try {
-        const pRes = await fetch(proxyUrl, {
-          ...options,
-          signal: pController.signal,
-        });
-        clearTimeout(pId);
-        if (pRes.ok) return pRes;
-      } catch (pErr) {
-        clearTimeout(pId);
-      }
+    if (attempt < maxRetries) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
     }
-    throw err;
   }
+
+  throw lastError || new Error('Request failed');
 }
 
 function absUrl(base, href) {
@@ -104,71 +320,247 @@ function absUrl(base, href) {
   }
 }
 
-function decodeBatoPass(code) {
-  let c = String(code);
-  c = c.split("!+[]").join("1");
-  c = c.split("!![]").join("1");
-  c = c.split("[]").join("0");
-  c = c.replace(/^\+/, "").replace(/\(\+/g, "(").replace(/ /g, "");
-  c = c.split("+((1+[+1]+(1+0)[1+1+1]+[1+1]+[+0])+0)[+1]+").join(".");
-  c = c.split("]+[").join(" ");
-  c = c.split("[").join("").split("]").join("");
-  let res = "";
-  for (const numPart of c.split(".")) {
-    const parts = numPart.trim().split(/\s+/).filter(Boolean);
-    for (const num of parts) {
-      res += String((num.match(/1/g) || []).length);
-    }
-    res += ".";
+function cleanMangaTitle(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .replace(/^Komik\s+/i, "")
+    .trim();
+}
+
+function activeFilterKeys(source, filters = {}) {
+  const groups = SOURCE_FILTER_SUPPORT[source] || [];
+  const sanitized = sanitizeCatalogFilters(source, filters);
+  return groups.filter((group) => sanitized[group] !== DEFAULT_FILTERS[group]);
+}
+
+function sourceSupportsFilterKeys(source, filterKeys = []) {
+  if (filterKeys.length === 0) return true;
+  const supported = new Set(SOURCE_FILTER_SUPPORT[source] || []);
+  return filterKeys.every((key) => supported.has(key));
+}
+
+function aggregateSourcesFor(source, filters = {}) {
+  if (source !== ALL_ID_SOURCE) return [];
+  const filterKeys = activeFilterKeys(source, filters);
+  return ID_SOURCE_ORDER.filter((sourceKey) => sourceSupportsFilterKeys(sourceKey, filterKeys));
+}
+
+function normalizeResultKey(item) {
+  const source = String(item?.source || "").trim();
+  const url = String(item?.url || "")
+    .trim()
+    .replace(/[?#].*$/, "")
+    .replace(/\/+$/, "");
+  return `${source}:${url || cleanMangaTitle(item?.title).toLowerCase()}`;
+}
+
+function withoutAggregateMeta(item) {
+  if (!item || typeof item !== "object") return item;
+  const { _sourceIndex, _resultIndex, _rank, ...cleanItem } = item;
+  return cleanItem;
+}
+
+function dedupeMangaResults(items = []) {
+  const seen = new Set();
+  const results = [];
+  for (const item of items) {
+    if (!item?.url) continue;
+    const key = normalizeResultKey(item);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    results.push(item);
   }
-  return res.replace(/^\.+|\.+$/g, "").replace(/\.+$/, "");
+  return results;
 }
 
-function decryptBatoWord(encryptedB64, passphrase) {
-  const decrypted = CryptoJS.AES.decrypt(encryptedB64, passphrase);
-  const utf8 = decrypted.toString(CryptoJS.enc.Utf8);
-  return utf8;
-}
-
-function extractJsonArrayAfter(html, constName) {
-  const marker = `const ${constName} =`;
-  const idx = html.indexOf(marker);
-  if (idx === -1) return null;
-  let i = idx + marker.length;
-  while (i < html.length && /\s/.test(html[i])) i++;
-  if (html[i] !== "[") return null;
-  let depth = 0;
-  const start = i;
-  for (; i < html.length; i++) {
-    const ch = html[i];
-    if (ch === "[") depth++;
-    if (ch === "]") {
-      depth--;
-      if (depth === 0) {
-        const slice = html.slice(start, i + 1);
-        try {
-          return JSON.parse(slice);
-        } catch {
-          return null;
-        }
-      }
-    }
+function interleaveBySource(items = [], sources = [], limit = 80) {
+  const groups = new Map();
+  for (const item of items) {
+    const index = Number.isInteger(item?._sourceIndex)
+      ? item._sourceIndex
+      : sourcePriority(item?.source, sources);
+    if (!groups.has(index)) groups.set(index, []);
+    groups.get(index).push(item);
   }
-  return null;
+
+  const output = [];
+  let row = 0;
+  let added = true;
+  while (output.length < limit && added) {
+    added = false;
+    for (let index = 0; index < sources.length && output.length < limit; index += 1) {
+      const item = groups.get(index)?.[row];
+      if (!item) continue;
+      output.push(item);
+      added = true;
+    }
+    row += 1;
+  }
+  return output;
 }
 
-function extractBatoScript(html) {
-  const $ = cheerio.load(html);
-  const scripts = $("script")
-    .toArray()
-    .map((el) => $(el).html() || "")
-    .filter(
-      (s) =>
-        s.includes("imgHttps") &&
-        s.includes("batoWord") &&
-        s.includes("batoPass"),
-    );
-  return scripts[0] || null;
+function sourcePriority(source, sources = []) {
+  const index = sources.indexOf(source);
+  return index === -1 ? sources.length : index;
+}
+
+function searchRank(query, item, source, index, sources) {
+  const q = cleanMangaTitle(query).toLowerCase();
+  const title = cleanMangaTitle(item?.title).toLowerCase();
+  let score = sourcePriority(source, sources) * 10 + index / 1000;
+  if (q && title === q) score -= 1000;
+  else if (q && title.startsWith(q)) score -= 500;
+  else if (q && title.includes(q)) score -= 250;
+  return score;
+}
+
+function resultMatchesQuery(query, item) {
+  const q = cleanMangaTitle(query).toLowerCase();
+  if (!q) return true;
+  const title = cleanMangaTitle(item?.title).toLowerCase();
+  if (title.includes(q)) return true;
+  const tokens = q.split(/\s+/).filter((token) => token.length > 2);
+  if (tokens.length === 0) return true;
+  return tokens.every((token) => title.includes(token));
+}
+
+async function aggregateLatest(source, page = 1, filters = {}) {
+  const sources = aggregateSourcesFor(source, filters);
+  if (sources.length === 0) return [];
+  const settled = await Promise.allSettled(
+    sources.map((sourceKey) => dispatchLatest(sourceKey, page, filters))
+  );
+  const merged = [];
+  settled.forEach((result, sourceIndex) => {
+    if (result.status !== "fulfilled" || !Array.isArray(result.value)) return;
+    const sourceKey = sources[sourceIndex];
+    result.value.forEach((item, resultIndex) => {
+      if (!item?.url) return;
+      merged.push({
+        ...item,
+        source: item.source || sourceKey,
+        _sourceIndex: sourceIndex,
+        _resultIndex: resultIndex,
+      });
+    });
+  });
+  const sorted = dedupeMangaResults(merged)
+    .sort((a, b) => (a._sourceIndex - b._sourceIndex) || (a._resultIndex - b._resultIndex));
+  return interleaveBySource(sorted, sources, 80).map(withoutAggregateMeta);
+}
+
+async function aggregateSearch(source, query, filters = {}) {
+  const sources = aggregateSourcesFor(source, filters);
+  if (sources.length === 0) return [];
+  const settled = await Promise.allSettled(
+    sources.map((sourceKey) => dispatchSearch(sourceKey, query, filters))
+  );
+  const merged = [];
+  settled.forEach((result, sourceIndex) => {
+    if (result.status !== "fulfilled" || !Array.isArray(result.value)) return;
+    const sourceKey = sources[sourceIndex];
+    result.value.forEach((item, resultIndex) => {
+      if (!item?.url || !resultMatchesQuery(query, item)) return;
+      const sourceName = item.source || sourceKey;
+      merged.push({
+        ...item,
+        source: sourceName,
+        _sourceIndex: sourceIndex,
+        _resultIndex: resultIndex,
+        _rank: searchRank(query, item, sourceName, resultIndex, sources),
+      });
+    });
+  });
+  return dedupeMangaResults(merged)
+    .sort((a, b) => (a._rank - b._rank) || (a._sourceIndex - b._sourceIndex) || (a._resultIndex - b._resultIndex))
+    .slice(0, 80)
+    .map(withoutAggregateMeta);
+}
+
+function wpFilterSlug(value) {
+  return String(value || "").trim().replace(/_/g, "-");
+}
+
+function wpOrderParam(filters = {}) {
+  switch (filters.sort) {
+    case "popular":
+      return "popular";
+    case "title":
+      return "title";
+    case "updated":
+    default:
+      return "update";
+  }
+}
+
+function buildWpCatalogPath(path, { page = 1, title = "", filters = {} } = {}) {
+  const params = new URLSearchParams();
+  const order = wpOrderParam(filters);
+  if (order) params.set("order", order);
+  if (page > 1) params.set("page", String(page));
+  if (title) params.set("title", title);
+  if (filters.type && filters.type !== "all") params.set("type", wpFilterSlug(filters.type));
+  if (filters.status && filters.status !== "all") params.set("status", wpFilterSlug(filters.status));
+  if (filters.genre && filters.genre !== "all") params.append("genre[]", wpFilterSlug(filters.genre));
+  const qs = params.toString();
+  return qs ? `${path}?${qs}` : path;
+}
+
+function filterKeyFromLabel(label) {
+  return String(label || "")
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function mdOriginalLanguageForType(type) {
+  switch (type) {
+    case "manga":
+      return "ja";
+    case "manhwa":
+      return "ko";
+    case "manhua":
+      return "zh";
+    default:
+      return "";
+  }
+}
+
+function mdOrderForSort(sort, hasTitleQuery) {
+  if (hasTitleQuery && (!sort || sort === "updated")) {
+    return { key: "relevance", direction: "desc" };
+  }
+  switch (sort) {
+    case "popular":
+      return { key: "followedCount", direction: "desc" };
+    case "title":
+      return { key: "title", direction: "asc" };
+    case "updated":
+    default:
+      return { key: "latestUploadedChapter", direction: "desc" };
+  }
+}
+
+let mangaDexTagMapPromise = null;
+
+async function getMangaDexTagMap() {
+  if (!mangaDexTagMapPromise) {
+    mangaDexTagMapPromise = (async () => {
+      const res = await safeFetch("https://api.mangadex.org/manga/tag", {
+        headers: HEADERS,
+      });
+      const json = await res.json();
+      const map = {};
+      (json.data || []).forEach((tag) => {
+        const name = tag?.attributes?.name?.en;
+        const id = tag?.id;
+        if (name && id) map[filterKeyFromLabel(name)] = id;
+      });
+      return map;
+    })();
+  }
+  return mangaDexTagMapPromise;
 }
 
 function imgAttr($, el) {
@@ -248,15 +640,18 @@ function findChapterImages($, chapterUrl) {
 }
 
 export function sourceShortLabel(sourceKey) {
-  if (sourceKey === "MangaDex (JSON API)") return "MangaDex";
-  if (sourceKey === "MangaDex (Bahasa Indonesia)") return "MD · ID";
-  if (sourceKey === "Bato.to (ID)") return "Bato";
-  if (sourceKey === "Komik Station") return "K.Station";
-  if (sourceKey === "ManhwaDesu") return "M.Desu";
-  if (sourceKey === "BacaKomik") return "Baca";
-  if (sourceKey === "Komikindo") return "Komikindo";
-  if (sourceKey === "Komiku") return "Komiku";
-  return sourceKey.length > 14 ? `${sourceKey.slice(0, 12)}…` : sourceKey;
+  if (!sourceKey) return "Unknown";
+  const label = String(sourceKey);
+  if (label === ALL_ID_SOURCE) return "All ID";
+  if (label === "MangaDex (JSON API)") return "MangaDex";
+  if (label === "MangaDex (Bahasa Indonesia)") return "MD · ID";
+  if (label === "Bato.to (ID)") return "Bato";
+  if (label === "Komik Station") return "K.Station";
+  if (label === "BacaKomik") return "Baca";
+  if (label === "Komikindo") return "Komikindo";
+  if (label === "Komiku") return "Komiku";
+  if (label === "ManhwaRead") return "M.Read";
+  return label.length > 14 ? `${label.slice(0, 12)}…` : label;
 }
 
 // --- Komiku ---
@@ -277,12 +672,13 @@ async function komikuTryDomains(path) {
   throw new Error(`Komiku failed. Last error: ${lastErr}`);
 }
 
-async function komikuLatest() {
-  const { html, base } = await komikuTryDomains("/");
-  const $ = cheerio.load(html);
+async function komikuLatest(page = 1) {
+  const path = page > 1 ? `/page/${page}/` : "/";
+  const { html, base } = await komikuTryDomains(path);
+  const $ = loadHtml(html);
   const results = [];
   $(".ls4, .ls4w, .bima, .ls2, .ls2j").each((_, el) => {
-    const title = $(el).find("h3 a, h4 a, .kan a").first().text().trim();
+    const title = cleanMangaTitle($(el).find("h3 a, h4 a, .kan a").first().text());
     const url = $(el).find("h3 a, h4 a, .kan a, a").first().attr("href");
     const imgEl = $(el).find("img").first();
     const image = imgEl.attr("data-src") || imgEl.attr("src");
@@ -306,10 +702,10 @@ async function komikuSearch(query) {
   const { html, base } = await komikuTryDomains(
     `/?post_type=manga&s=${encodeURIComponent(query)}`,
   );
-  const $ = cheerio.load(html);
+  const $ = loadHtml(html);
   const results = [];
   $(".bima").each((_, el) => {
-    const title = $(el).find("h3 a, h4 a, .kan a").first().text().trim();
+    const title = cleanMangaTitle($(el).find("h3 a, h4 a, .kan a").first().text());
     const url = $(el).find("h3 a, h4 a, .kan a, a").first().attr("href");
     const imgEl = $(el).find("img").first();
     const image = imgEl.attr("data-src") || imgEl.attr("src");
@@ -324,7 +720,7 @@ async function komikuSearch(query) {
   if (results.length > 0) return results;
 
   $(".ls4, .ls4w, .ls2, .ls2j").each((_, el) => {
-    const title = $(el).find("h3 a, h4 a, .kan a").first().text().trim();
+    const title = cleanMangaTitle($(el).find("h3 a, h4 a, .kan a").first().text());
     const url = $(el).find("h3 a, h4 a, .kan a, a").first().attr("href");
     const imgEl = $(el).find("img").first();
     const image = imgEl.attr("data-src") || imgEl.attr("src");
@@ -341,8 +737,8 @@ async function komikuSearch(query) {
 
 async function komikuDetails(url) {
   const { html } = await komikuTryDomains(url);
-  const $ = cheerio.load(html);
-  const title = $("#Judul h1").text().trim() || $("h1").first().text().trim();
+  const $ = loadHtml(html);
+  const title = cleanMangaTitle($("#Judul h1").text() || $("h1").first().text());
   const imgEl = $(".ims img").first();
   const image = imgEl.attr("data-src") || imgEl.attr("src") || "";
   const description =
@@ -367,7 +763,7 @@ async function komikuDetails(url) {
 
 async function komikuImages(chapterUrl) {
   const { html } = await komikuTryDomains(chapterUrl);
-  const $ = cheerio.load(html);
+  const $ = loadHtml(html);
   return findChapterImages($, chapterUrl);
 }
 
@@ -399,19 +795,20 @@ async function komikindoTryDomains(path) {
 
 async function komikindoLatest() {
   const { html, base } = await komikindoTryDomains("/");
-  const $ = cheerio.load(html);
+  const $ = loadHtml(html);
   const results = [];
   $(".animepost").each((_, el) => {
-    const title =
+    const title = cleanMangaTitle(
       $(el).find(".tt h3 a").text().trim() ||
-      $(el).find(".tt h4").text().trim();
+      $(el).find(".tt h4").text().trim()
+    );
     const url =
       $(el).find(".tt h3 a").attr("href") || $(el).find("a").attr("href");
-    const image = $(el).find("img").attr("src");
+    const image = imgAttr($, $(el).find("img").first()) || $(el).find("img").attr("src");
     if (title && url)
       results.push({
         title,
-        image,
+        image: absUrl(base, image),
         url: absUrl(base, url),
         source: "Komikindo",
       });
@@ -423,19 +820,20 @@ async function komikindoSearch(query) {
   const { html, base } = await komikindoTryDomains(
     `/?s=${encodeURIComponent(query)}`,
   );
-  const $ = cheerio.load(html);
+  const $ = loadHtml(html);
   const results = [];
   $(".animepost").each((_, el) => {
-    const title =
+    const title = cleanMangaTitle(
       $(el).find(".tt h3 a").text().trim() ||
-      $(el).find(".tt h4").text().trim();
+      $(el).find(".tt h4").text().trim()
+    );
     const url =
       $(el).find(".tt h3 a").attr("href") || $(el).find("a").attr("href");
-    const image = $(el).find("img").attr("src");
+    const image = imgAttr($, $(el).find("img").first()) || $(el).find("img").attr("src");
     if (title && url)
       results.push({
         title,
-        image,
+        image: absUrl(base, image),
         url: absUrl(base, url),
         source: "Komikindo",
       });
@@ -445,14 +843,15 @@ async function komikindoSearch(query) {
 
 async function komikindoDetails(url) {
   const { html } = await komikindoTryDomains(url);
-  const $ = cheerio.load(html);
-  const title = $(".entry-title").text().trim();
-  const image = $(".thumb img").attr("src");
+  const $ = loadHtml(html);
+  const title = cleanMangaTitle($(".entry-title").text());
+  const $thumbImg = $(".thumb img");
+  const image = absUrl(url, $thumbImg.attr("data-src") || $thumbImg.attr("data-lazy-src") || $thumbImg.attr("src") || "");
   const description = $('div[itemprop="description"]').text().trim();
   const chapters = [];
   $("#chapter_list li").each((_, el) => {
     const href = $(el).find(".lchx a").attr("href");
-    const name = $(el).find(".lchx a").text().trim();
+    const name = $(el).find(".lchx a").text().replace(/\s+/g, " ").trim();
     if (href && name) chapters.push({ name, url: absUrl(url, href) });
   });
   return { title, image, description, chapters };
@@ -460,7 +859,7 @@ async function komikindoDetails(url) {
 
 async function komikindoImages(chapterUrl) {
   const { html } = await komikindoTryDomains(chapterUrl);
-  const $ = cheerio.load(html);
+  const $ = loadHtml(html);
   return findChapterImages($, chapterUrl);
 }
 
@@ -490,28 +889,33 @@ async function bacakomikTryDomains(path) {
   throw new Error(`BacaKomik failed. Last error: ${lastErr}`);
 }
 
-async function bacakomikLatest() {
+async function bacakomikLatest(page = 1, filters = {}) {
+  const safeFilters = sanitizeCatalogFilters("BacaKomik", filters);
   const { html, base } = await bacakomikTryDomains(
-    "/daftar-komik/?order=update",
+    buildWpCatalogPath("/daftar-komik/", { page, filters: safeFilters }),
   );
   return parseBacakomikListing(html, base);
 }
 
-async function bacakomikSearch(query) {
+async function bacakomikSearch(query, filters = {}) {
+  const safeFilters = sanitizeCatalogFilters("BacaKomik", filters);
   const { html, base } = await bacakomikTryDomains(
-    `/daftar-komik/?title=${encodeURIComponent(query)}`,
+    buildWpCatalogPath("/daftar-komik/", {
+      title: query,
+      filters: safeFilters,
+    }),
   );
   return parseBacakomikListing(html, base);
 }
 
 function parseBacakomikListing(html, baseForAbs) {
-  const $ = cheerio.load(html);
+  const $ = loadHtml(html);
   const results = [];
   $(".animepost").each((_, el) => {
     const $el = $(el);
     const a = $el.find("div.animposx > a").first();
     const url = a.attr("href");
-    const title = $el.find(".animposx .tt h4").text().trim();
+    const title = cleanMangaTitle($el.find(".animposx .tt h4").text());
     const $img = $el.find("div.limit img").first();
     const image =
       $img.attr("data-lazy-src") ||
@@ -532,10 +936,11 @@ function parseBacakomikListing(html, baseForAbs) {
 
 async function bacakomikDetails(url) {
   const { html } = await bacakomikTryDomains(url);
-  const $ = cheerio.load(html);
-  const title =
+  const $ = loadHtml(html);
+  const title = cleanMangaTitle(
     $("#breadcrumbs li:last-child span").text().trim() ||
-    $(".entry-title").text().trim();
+    $(".entry-title").text().trim()
+  );
   const $thumb = $(".thumb > img").first();
   const image =
     $thumb.attr("data-src") ||
@@ -547,7 +952,7 @@ async function bacakomikDetails(url) {
   const chapters = [];
   $("#chapter_list li").each((_, el) => {
     const href = $(el).find(".lchx a").attr("href");
-    const name = $(el).find(".lchx a").text().trim();
+    const name = $(el).find(".lchx a").text().replace(/\s+/g, " ").trim();
     if (href && name) chapters.push({ name, url: absUrl(url, href) });
   });
   return { title, image: absUrl(url, image), description, chapters };
@@ -555,7 +960,7 @@ async function bacakomikDetails(url) {
 
 async function bacakomikImages(chapterUrl) {
   const { html } = await bacakomikTryDomains(chapterUrl);
-  const $ = cheerio.load(html);
+  const $ = loadHtml(html);
   return findChapterImages($, chapterUrl);
 }
 
@@ -568,17 +973,10 @@ const MT_SOURCE_DOMAINS = {
     "https://komikstation.id",
     "https://komikstation.net",
   ],
-  ManhwaDesu: [
-    "https://manhwadesu.store",
-    "https://manhwadesu.com",
-    "https://manhwadesu.co",
-    "https://manhwadesu.id",
-  ],
 };
 
 const MT_SOURCE_DIRS = {
   "Komik Station": "manga",
-  ManhwaDesu: "komik",
 };
 
 async function mtTryDomains(domains, path) {
@@ -596,23 +994,27 @@ async function mtTryDomains(domains, path) {
   throw new Error(`All domains failed for path: ${path.slice(0, 60)}`);
 }
 
-function mtBuildListUrl(baseUrl, mangaDir, page, order, title) {
+function mtBuildListUrl(baseUrl, mangaDir, page, order, title, filters = {}) {
   const b = baseUrl.replace(/\/$/, "");
   const dir = (mangaDir || "manga").replace(/^\/|\/$/g, "");
   const u = new URL(`${b}/${dir}/`);
   u.searchParams.set("page", String(page));
   if (title !== undefined && title !== null) u.searchParams.set("title", title);
   if (order) u.searchParams.set("order", order);
+  if (filters.type && filters.type !== "all") u.searchParams.set("type", wpFilterSlug(filters.type));
+  if (filters.status && filters.status !== "all") u.searchParams.set("status", wpFilterSlug(filters.status));
+  if (filters.genre && filters.genre !== "all") u.searchParams.append("genre[]", wpFilterSlug(filters.genre));
   return u.href;
 }
 
-async function mtLatest(sourceKey) {
+async function mtLatest(sourceKey, page = 1, filters = {}) {
+  const safeFilters = sanitizeCatalogFilters(sourceKey, filters);
   const domains = MT_SOURCE_DOMAINS[sourceKey] || [sourceKey];
   const mangaDir = MT_SOURCE_DIRS[sourceKey] || "manga";
   let lastErr = null;
   for (const domain of domains) {
     try {
-      const url = mtBuildListUrl(domain, mangaDir, 1, "update", "");
+      const url = mtBuildListUrl(domain, mangaDir, page, wpOrderParam(safeFilters), "", safeFilters);
       const res = await safeFetch(url, {
         headers: HEADERS,
       });
@@ -627,13 +1029,14 @@ async function mtLatest(sourceKey) {
   throw lastErr || new Error(`Failed to fetch latest from ${sourceKey}`);
 }
 
-async function mtSearch(sourceKey, query) {
+async function mtSearch(sourceKey, query, filters = {}) {
+  const safeFilters = sanitizeCatalogFilters(sourceKey, filters);
   const domains = MT_SOURCE_DOMAINS[sourceKey] || [sourceKey];
   const mangaDir = MT_SOURCE_DIRS[sourceKey] || "manga";
   let lastErr = null;
   for (const domain of domains) {
     try {
-      const url = mtBuildListUrl(domain, mangaDir, 1, "", query);
+      const url = mtBuildListUrl(domain, mangaDir, 1, wpOrderParam(safeFilters), query, safeFilters);
       const res = await safeFetch(url, {
         headers: HEADERS,
       });
@@ -649,7 +1052,7 @@ async function mtSearch(sourceKey, query) {
 }
 
 function mtParseListing(html, baseUrl, sourceKey) {
-  const $ = cheerio.load(html);
+  const $ = loadHtml(html);
   const sel = ".utao .uta .imgu, .listupd .bs .bsx, .listo .bs .bsx";
   const results = [];
   $(sel).each((_, el) => {
@@ -676,7 +1079,7 @@ async function mtDetails(url) {
     headers: HEADERS,
   });
   const html = await res.text();
-  const $ = cheerio.load(html);
+  const $ = loadHtml(html);
   const root = $(
     "div.bigcontent, div.animefull, div.main-info, div.postbody",
   ).first();
@@ -702,7 +1105,8 @@ async function mtDetails(url) {
     const $a = $el.find("a").first();
     const href = $a.attr("href");
     const name =
-      $el.find(".lch a, .chapternum").text().trim() || $a.text().trim();
+      $el.find(".lch a, .chapternum").text().replace(/\s+/g, " ").trim() ||
+      $a.text().replace(/\s+/g, " ").trim();
     if (href && name) chapters.push({ name, url: absUrl(url, href) });
   });
   return {
@@ -718,53 +1122,218 @@ async function mtImages(chapterUrl) {
     headers: HEADERS,
   });
   const html = await res.text();
-  const $ = cheerio.load(html);
+  const $ = loadHtml(html);
   return findChapterImages($, chapterUrl);
 }
 
 // --- MangaDex ---
-async function mdLatest(lang) {
-  const q =
-    lang === "id"
-      ? "limit=20&availableTranslatedLanguage[]=id&includes[]=cover_art"
-      : "limit=20&contentRating[]=safe&includes[]=cover_art";
+async function buildMangaDexQuery(lang, page, filters = {}, query = "") {
+  const source = lang === "id" ? "MangaDex (Bahasa Indonesia)" : "MangaDex (JSON API)";
+  const safeFilters = sanitizeCatalogFilters(source, filters);
+  const offset = (page - 1) * 20;
+  const params = new URLSearchParams();
+  params.set("limit", "20");
+  params.set("offset", String(offset));
+  params.append("includes[]", "cover_art");
+  if (query) params.set("title", query);
+  if (lang === "id") params.append("availableTranslatedLanguage[]", "id");
+
+  const rating = safeFilters.contentRating;
+  if (rating === "safe") {
+    params.append("contentRating[]", "safe");
+  } else if (rating === "suggestive") {
+    params.append("contentRating[]", "safe");
+    params.append("contentRating[]", "suggestive");
+  } else {
+    ["safe", "suggestive", "erotica"].forEach((value) => {
+      params.append("contentRating[]", value);
+    });
+  }
+
+  if (safeFilters.status !== "all") {
+    params.append("status[]", safeFilters.status);
+  }
+
+  const originalLanguage = mdOriginalLanguageForType(safeFilters.type);
+  if (originalLanguage) {
+    params.append("originalLanguage[]", originalLanguage);
+  }
+
+  if (safeFilters.genre !== "all") {
+    const tagMap = await getMangaDexTagMap();
+    const tagId = tagMap[safeFilters.genre];
+    if (tagId) {
+      params.append("includedTags[]", tagId);
+      params.set("includedTagsMode", "AND");
+    }
+  }
+
+  const order = mdOrderForSort(safeFilters.sort, Boolean(query));
+  params.set(`order[${order.key}]`, order.direction);
+  return params.toString();
+}
+
+async function mdLatest(lang, page = 1, filters = {}) {
+  const q = await buildMangaDexQuery(lang, page, filters);
   const res = await safeFetch(`https://api.mangadex.org/manga?${q}`, {
     headers: HEADERS,
   });
   const json = await res.json();
   const src =
     lang === "id" ? "MangaDex (Bahasa Indonesia)" : "MangaDex (JSON API)";
-  return json.data.map((m) => {
-    const cover = m.relationships.find((r) => r.type === "cover_art");
+  return (json.data || []).map((m) => {
+    const cover = m.relationships?.find((r) => r.type === "cover_art");
     const fileName = cover?.attributes?.fileName;
+    const titles = m.attributes?.title || {};
     return {
-      title: m.attributes.title.en || Object.values(m.attributes.title)[0],
+      title: titles.en || Object.values(titles)[0] || "Unknown",
       url: m.id,
-      image: `https://uploads.mangadex.org/covers/${m.id}/${fileName}.256.jpg`,
+      image: fileName
+        ? `https://uploads.mangadex.org/covers/${m.id}/${fileName}.256.jpg`
+        : "",
       source: src,
     };
   });
 }
 
-async function mdSearch(lang, query) {
-  const tl = lang === "id" ? "&availableTranslatedLanguage[]=id" : "";
+async function mdSearch(lang, query, filters = {}) {
+  const q = await buildMangaDexQuery(lang, 1, filters, query);
   const res = await safeFetch(
-    `https://api.mangadex.org/manga?title=${encodeURIComponent(query)}&limit=20&includes[]=cover_art${tl}`,
+    `https://api.mangadex.org/manga?${q}`,
     { headers: HEADERS },
   );
   const json = await res.json();
   const src =
     lang === "id" ? "MangaDex (Bahasa Indonesia)" : "MangaDex (JSON API)";
-  return json.data.map((m) => {
-    const cover = m.relationships.find((r) => r.type === "cover_art");
+  return (json.data || []).map((m) => {
+    const cover = m.relationships?.find((r) => r.type === "cover_art");
     const fileName = cover?.attributes?.fileName;
+    const titles = m.attributes?.title || {};
     return {
-      title: m.attributes.title.en || Object.values(m.attributes.title)[0],
+      title: titles.en || Object.values(titles)[0] || "Unknown",
       url: m.id,
-      image: `https://uploads.mangadex.org/covers/${m.id}/${fileName}.256.jpg`,
+      image: fileName
+        ? `https://uploads.mangadex.org/covers/${m.id}/${fileName}.256.jpg`
+        : "",
       source: src,
     };
   });
+}
+
+async function mdFetchChapterFeed(id, translatedLanguage) {
+  const chapters = [];
+  let offset = 0;
+  const pageSize = 500;
+  const maxPages = 20; // safety: max 10000 entries per language
+
+  for (let page = 0; page < maxPages; page += 1) {
+    const params = new URLSearchParams();
+    params.set("limit", String(pageSize));
+    params.set("offset", String(offset));
+    params.set("translatedLanguage[]", translatedLanguage);
+    params.set("order[chapter]", "desc");
+
+    const res = await safeFetch(
+      `https://api.mangadex.org/manga/${id}/feed?${params.toString()}`,
+      { headers: HEADERS },
+    );
+    const json = await res.json();
+    const data = Array.isArray(json.data) ? json.data : [];
+    chapters.push(...data);
+
+    const total = Number(json.total) || chapters.length;
+    if (chapters.length >= total || data.length < pageSize) break;
+    offset += pageSize;
+  }
+
+  return chapters;
+}
+
+function mdChapterKey(chapter) {
+  const attrs = chapter?.attributes || {};
+  const chapterNo = String(attrs.chapter || "").trim();
+  const volume = String(attrs.volume || "").trim();
+  return chapterNo ? `${volume}|${chapterNo}` : chapter?.id || "";
+}
+
+function mdChapterNumber(chapter) {
+  const raw = String(chapter?.attributes?.chapter || "").trim();
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+function mdChapterDate(chapter) {
+  const attrs = chapter?.attributes || {};
+  const value = attrs.readableAt || attrs.publishAt || attrs.updatedAt || attrs.createdAt || "";
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : 0;
+}
+
+function mdIsReadableChapter(chapter) {
+  const attrs = chapter?.attributes || {};
+  return !attrs.externalUrl && Number(attrs.pages || 0) > 0;
+}
+
+function mdChooseBetterChapter(current, candidate, languagePriority) {
+  if (!current) return candidate;
+
+  const currentReadable = mdIsReadableChapter(current) ? 1 : 0;
+  const candidateReadable = mdIsReadableChapter(candidate) ? 1 : 0;
+  if (candidateReadable !== currentReadable) {
+    return candidateReadable > currentReadable ? candidate : current;
+  }
+
+  const currentLang = current?.attributes?.translatedLanguage || "";
+  const candidateLang = candidate?.attributes?.translatedLanguage || "";
+  const currentRank = languagePriority.indexOf(currentLang);
+  const candidateRank = languagePriority.indexOf(candidateLang);
+  const normalizedCurrentRank = currentRank === -1 ? languagePriority.length : currentRank;
+  const normalizedCandidateRank = candidateRank === -1 ? languagePriority.length : candidateRank;
+  if (normalizedCandidateRank !== normalizedCurrentRank) {
+    return normalizedCandidateRank < normalizedCurrentRank ? candidate : current;
+  }
+
+  const currentPages = Number(current?.attributes?.pages || 0);
+  const candidatePages = Number(candidate?.attributes?.pages || 0);
+  if (candidatePages !== currentPages) {
+    return candidatePages > currentPages ? candidate : current;
+  }
+
+  return mdChapterDate(candidate) > mdChapterDate(current) ? candidate : current;
+}
+
+function mdUniqueReadableChapters(chapters, languagePriority) {
+  const byChapter = new Map();
+  chapters.forEach((chapter) => {
+    const key = mdChapterKey(chapter);
+    if (!key) return;
+    byChapter.set(
+      key,
+      mdChooseBetterChapter(byChapter.get(key), chapter, languagePriority),
+    );
+  });
+
+  return [...byChapter.values()]
+    .filter(mdIsReadableChapter)
+    .sort((a, b) => {
+      const chapterDiff = mdChapterNumber(b) - mdChapterNumber(a);
+      if (chapterDiff !== 0) return chapterDiff;
+      const volumeDiff =
+        Number.parseFloat(b?.attributes?.volume || "0") -
+        Number.parseFloat(a?.attributes?.volume || "0");
+      if (Number.isFinite(volumeDiff) && volumeDiff !== 0) return volumeDiff;
+      return mdChapterDate(b) - mdChapterDate(a);
+    });
+}
+
+function mdChapterName(chapter, preferredLanguage) {
+  const attrs = chapter?.attributes || {};
+  const chapterNo = attrs.chapter || "?";
+  const title = typeof attrs.title === "string" ? attrs.title.trim() : "";
+  const lang = attrs.translatedLanguage || "";
+  const fallbackSuffix = lang && lang !== preferredLanguage ? ` (${lang.toUpperCase()})` : "";
+  const base = `Ch. ${chapterNo}`;
+  return title ? `${base}: ${title}${fallbackSuffix}` : `${base}${fallbackSuffix}`;
 }
 
 async function mdDetails(lang, id) {
@@ -772,24 +1341,32 @@ async function mdDetails(lang, id) {
     `https://api.mangadex.org/manga/${id}?includes[]=cover_art`,
     { headers: HEADERS },
   );
-  const m = (await res.json()).data;
-  const tl = lang === "id" ? "id" : "en";
-  const chRes = await safeFetch(
-    `https://api.mangadex.org/manga/${id}/feed?limit=500&translatedLanguage[]=${tl}&order[chapter]=desc`,
-    { headers: HEADERS },
+  const json = await res.json();
+  const m = json?.data;
+  if (!m) throw new Error("MangaDex manga not found");
+  const preferredLanguage = lang === "id" ? "id" : "en";
+  const languagePriority = lang === "id" ? ["id", "en"] : ["en"];
+  const languageChapters = await Promise.all(
+    languagePriority.map((language) => mdFetchChapterFeed(id, language)),
   );
-  const chJson = await chRes.json();
-  const cover = m.relationships.find((r) => r.type === "cover_art");
+  const allChapters = mdUniqueReadableChapters(
+    languageChapters.flat(),
+    languagePriority,
+  );
+  const cover = m.relationships?.find((r) => r.type === "cover_art");
   const fileName = cover?.attributes?.fileName;
+  const titles = m.attributes?.title || {};
   return {
-    title: m.attributes.title.en || Object.values(m.attributes.title)[0],
-    image: `https://uploads.mangadex.org/covers/${m.id}/${fileName}.512.jpg`,
+    title: titles.en || Object.values(titles)[0] || "Unknown",
+    image: fileName
+      ? `https://uploads.mangadex.org/covers/${m.id}/${fileName}.512.jpg`
+      : "",
     description:
-      m.attributes.description.en ||
-      m.attributes.description.id ||
+      m.attributes?.description?.en ||
+      m.attributes?.description?.id ||
       "No description",
-    chapters: chJson.data.map((c) => ({
-      name: `Ch. ${c.attributes.chapter || "?"}`,
+    chapters: allChapters.map((c) => ({
+      name: mdChapterName(c, preferredLanguage),
       url: c.id,
     })),
   };
@@ -801,47 +1378,50 @@ async function mdImages(chapterId) {
     { headers: HEADERS },
   );
   const json = await res.json();
+  if (!json?.chapter?.hash || !json?.baseUrl) {
+    throw new Error("MangaDex chapter image server unavailable");
+  }
   const hash = json.chapter.hash;
-  return json.chapter.data.map((img) => `${json.baseUrl}/data/${hash}/${img}`);
+  return (json.chapter.data || []).map(
+    (img) => `${json.baseUrl}/data/${hash}/${img}`,
+  );
 }
 
 // --- Bato.to (Indonesian catalog) ---
-async function batoLatest() {
-  const { html, base } = await batoTryDomains(
-    `/browse?langs=id&sort=update&page=1`,
-  );
-  return batoParseBrowse(html, "Bato.to (ID)", base);
+async function batoLatest(page = 1) {
+  const path = page > 1 ? `/updated?page=${page}` : "/updated";
+  const { html, base } = await batoTryDomains(path);
+  return batoFilterReadableResults(batoParseBrowse(html, "Bato.to (ID)", base), base);
 }
 
 async function batoSearch(query) {
   const { html, base } = await batoTryDomains(
-    `/search?word=${encodeURIComponent(query)}&page=1`,
+    `/?s=${encodeURIComponent(query)}`,
   );
-  return batoParseBrowse(html, "Bato.to (ID)", base);
+  return batoFilterReadableResults(batoParseBrowse(html, "Bato.to (ID)", base), base);
 }
 
 function batoParseBrowse(html, sourceKey, baseForAbs) {
-  const $ = cheerio.load(html);
+  const $ = loadHtml(html);
   const results = [];
-  let cols = $("#series-list div.col").filter(
-    (_, el) => $(el).find('[data-lang="id"]').length > 0,
-  );
-  if (!cols.length) cols = $("#series-list div.col");
-  cols.each((_, el) => {
-    const $el = $(el);
-    const coverA = $el.find("a.item-cover").first();
-    const titleA = $el.find("a.item-title").first();
-    const href = coverA.attr("href") || titleA.attr("href");
-    const title = titleA.text().trim();
-    const img =
-      coverA.find("img").attr("src") ||
-      coverA.find("img").attr("data-src") ||
-      "";
-    if (title && href) {
+  const seen = new Set();
+  $('a[href*="/manga/"]').each((_, el) => {
+    const href = $(el).attr("href") || "";
+    const text = $(el).text().trim();
+    if (href && text.length > 3 && text.length < 100 && !href.includes("#")) {
+      const fullUrl = absUrl(baseForAbs, href);
+      if (seen.has(fullUrl)) return;
+      seen.add(fullUrl);
+      const $parent = $(el).closest(".info, .item, div");
+      const $img = $parent.find("img").first().length
+        ? $parent.find("img").first()
+        : $(el).find("img").first();
+      const image =
+        $img.attr("data-src") || $img.attr("src") || "";
       results.push({
-        title,
-        image: absUrl(baseForAbs, img),
-        url: absUrl(baseForAbs, href),
+        title: text,
+        image: absUrl(baseForAbs, image),
+        url: fullUrl,
         source: sourceKey,
       });
     }
@@ -849,24 +1429,100 @@ function batoParseBrowse(html, sourceKey, baseForAbs) {
   return results;
 }
 
+function batoSlugFromUrl(value) {
+  const match = String(value || "").match(/\/manga\/([^/?#]+)/);
+  return match ? match[1] : "";
+}
+
+function batoApiChaptersToItems(base, slug, chapters = []) {
+  return chapters
+    .map((chapter) => ({
+      name: chapter.chapter_name || `Chapter ${chapter.chapter_num || ""}`,
+      url: chapter.chapter_slug ? `${base}/read/${slug}/${chapter.chapter_slug}` : "",
+    }))
+    .filter((chapter) => chapter.url);
+}
+
+async function batoFetchChapterList(base, slug) {
+  if (!slug) return [];
+  const chRes = await safeFetch(
+    `${base}/get-chapter-list?slug=${encodeURIComponent(slug)}`,
+    { headers: { ...HEADERS, "X-Requested-With": "XMLHttpRequest" } },
+  );
+  if (!chRes.ok) return [];
+  const chJson = await chRes.json();
+  const chArr = Array.isArray(chJson) ? chJson : chJson.data || [];
+  return batoApiChaptersToItems(base, slug, chArr);
+}
+
+async function batoFilterReadableResults(items = [], base, desired = 30) {
+  const candidates = items.slice(0, Math.max(desired * 2, 40));
+  const valid = [];
+  const batchSize = 6;
+
+  for (let i = 0; i < candidates.length && valid.length < desired; i += batchSize) {
+    const batch = candidates.slice(i, i + batchSize);
+    const checked = await Promise.allSettled(
+      batch.map(async (item) => {
+        const slug = batoSlugFromUrl(item?.url);
+        const chapters = await batoFetchChapterList(base, slug);
+        return chapters.length > 0 ? item : null;
+      }),
+    );
+    checked.forEach((result) => {
+      if (result.status === "fulfilled" && result.value && valid.length < desired) {
+        valid.push(result.value);
+      }
+    });
+  }
+
+  return valid;
+}
+
 async function batoDetails(pageUrl) {
-  const { html } = await batoTryDomains(pageUrl);
-  const $ = cheerio.load(html);
-  const info = $("div#mainer div.container-fluid").first();
-  const title = info.find("h3").first().text().trim();
-  const image = $("div.attr-cover img").attr("src") || "";
-  const description = info.find("div.limit-html").text().trim();
-  const chapters = [];
-  $("div.main div.p-2").each((_, el) => {
-    const $el = $(el);
-    const a = $el.find("a.chapt").first();
-    const href = a.attr("href");
-    const name = a.text().trim();
-    if (href && name) chapters.push({ name, url: absUrl(pageUrl, href) });
-  });
+  const { html, base } = await batoTryDomains(pageUrl);
+  const $ = loadHtml(html);
+  const title = $("h1").first().text().trim();
+  const $poster = $(".poster img").first();
+  const image =
+    $poster.attr("data-src") ||
+    $poster.attr("data-fallback") ||
+    $poster.attr("src") ||
+    $('meta[property="og:image"]').attr("content") ||
+    "";
+  const description =
+    $('meta[property="og:description"]').attr("content") ||
+    $('meta[name="description"]').attr("content") ||
+    "";
+
+  const slug = batoSlugFromUrl(pageUrl);
+  let chapters = [];
+
+  // Use the full chapter list API
+  if (slug) {
+    try {
+      chapters = await batoFetchChapterList(base, slug);
+    } catch {}
+  }
+
+  // Fallback: parse from initial page HTML
+  if (chapters.length === 0) {
+    $("a").each((_, el) => {
+      const href = $(el).attr("href") || "";
+      const text = $(el).text().replace(/\s+/g, " ").trim();
+      if (
+        href.includes("/read/") &&
+        href.includes("chapter") &&
+        text.length > 2
+      ) {
+        chapters.push({ name: text, url: absUrl(base, href) });
+      }
+    });
+  }
+
   return {
     title,
-    image: absUrl(pageUrl, image),
+    image: absUrl(base, image),
     description,
     chapters,
   };
@@ -874,152 +1530,255 @@ async function batoDetails(pageUrl) {
 
 async function batoImages(chapterUrl) {
   const { html } = await batoTryDomains(chapterUrl);
-  // #region agent log
-  debugLog(
-    "scrapers.js:batoImages",
-    "after_fetch",
-    {
-      ok: res.ok,
-      status: res.status,
-      htmlLen: html.length,
-      hasImgHttps: html.includes("imgHttps"),
-      hasBatoWord: html.includes("batoWord"),
-      hasJustAMoment: html.toLowerCase().includes("just a moment"),
-    },
-    "H5",
-  );
-  // #endregion
-  const script = extractBatoScript(html);
-  // #region agent log
-  debugLog(
-    "scrapers.js:batoImages",
-    "script_extract",
-    { scriptFound: !!script, scriptLen: script ? script.length : 0 },
-    "H1",
-  );
-  // #endregion
-  if (!script) {
-    // Fallback: try to find image URLs directly in the HTML
-    const $ = cheerio.load(html);
-    const directImages = [];
-    $("img").each((_, el) => {
-      const u = imgAttr($, el);
-      if (
-        u &&
-        (u.includes("bato") ||
-          u.includes("chapter") ||
-          u.includes("comic") ||
-          u.includes("manga") ||
-          u.includes("series"))
-      ) {
-        directImages.push(absUrl(chapterUrl, u));
-      }
-    });
-    if (directImages.length > 0) return directImages;
-    // Try regex fallback
-    const imgRegex =
-      /https?:\/\/[^"'\s]+\.(jpg|jpeg|png|webp|gif)(\?[^"'\s]*)?/gi;
-    const matches = html.match(imgRegex);
-    if (matches) {
-      return matches.filter(
-        (u) =>
-          !u.includes("avatar") && !u.includes("icon") && !u.includes("logo"),
-      );
+  const $ = loadHtml(html);
+  const images = [];
+  $("img").each((_, el) => {
+    const u =
+      $(el).attr("data-src") || $(el).attr("src") || "";
+    if (
+      u &&
+      (u.includes("cdn") || u.includes("manga") || u.includes("chapter")) &&
+      !u.includes("avatar") &&
+      !u.includes("icon") &&
+      !u.includes("logo") &&
+      !u.includes("banner") &&
+      !u.includes("default")
+    ) {
+      if (!images.includes(u)) images.push(u);
     }
-    throw new Error("Bato chapter script missing and no fallback images found");
-  }
-  const imgHttps = extractJsonArrayAfter(script, "imgHttps");
-  if (!imgHttps || !Array.isArray(imgHttps))
-    throw new Error("imgHttps parse failed");
-
-  let passExpr = "";
-  const passIdx = script.indexOf("const batoPass =");
-  if (passIdx !== -1) {
-    const after = script.slice(passIdx + "const batoPass =".length);
-    const semi = after.indexOf(";");
-    passExpr = semi === -1 ? after.trim() : after.slice(0, semi).trim();
-  }
-  let wordQuoted = "";
-  const wordIdx = script.indexOf("const batoWord =");
-  if (wordIdx !== -1) {
-    const after = script.slice(wordIdx + "const batoWord =".length);
-    const semi = after.indexOf(";");
-    wordQuoted = semi === -1 ? after.trim() : after.slice(0, semi).trim();
-  }
-  const batoWord = wordQuoted.replace(/^["']|["']$/g, "");
-  let queryArgs = [];
-  let decryptErr = "";
-  try {
-    const pass = decodeBatoPass(passExpr);
-    const dec = decryptBatoWord(batoWord, pass);
-    queryArgs = JSON.parse(dec);
-  } catch (e) {
-    decryptErr = String(e?.message || e).slice(0, 160);
-    queryArgs = [];
-  }
-  // #region agent log
-  debugLog(
-    "scrapers.js:batoImages",
-    "decrypt_state",
-    {
-      imgHttpsLen: imgHttps.length,
-      passExprLen: passExpr.length,
-      batoWordLen: batoWord.length,
-      queryArgsLen: Array.isArray(queryArgs) ? queryArgs.length : -1,
-      decryptErr: decryptErr || null,
-    },
-    "H2",
-  );
-  // #endregion
-  // If decryption fails, still return the raw image URLs (they might work without query args)
-  if (!Array.isArray(queryArgs) || queryArgs.length !== imgHttps.length) {
-    return imgHttps.map((u) => String(u));
-  }
-  return imgHttps.map((u, i) => {
-    const acc = queryArgs[i];
-    return acc ? `${u}?${acc}` : String(u);
   });
+  if (images.length > 0) {
+    return [...new Set(images)]
+      .map((u) => absUrl(chapterUrl, u))
+      .filter((u) => u.startsWith("http"));
+  }
+  // Fallback: regex on HTML
+  const imgRegex =
+    /https?:\/\/[^"'\s]+\.(jpg|jpeg|png|webp|gif)(\?[^"'\s]*)?/gi;
+  const matches = html.match(imgRegex);
+  if (matches) {
+    return [...new Set(matches)]
+      .filter(
+        (u) =>
+          !u.includes("avatar") &&
+          !u.includes("icon") &&
+          !u.includes("logo") &&
+          !u.includes("banner"),
+      )
+      .map((u) => absUrl(chapterUrl, u))
+      .filter((u) => u.startsWith("http"));
+  }
+  return [];
 }
 
-function dispatchLatest(source) {
+// --- ManhwaRead ---
+const MANHWAREAD_DOMAINS = ["https://manhwaread.com"];
+
+async function manhwareadTryDomains(path) {
+  let lastErr = "Unknown error";
+  for (const domain of MANHWAREAD_DOMAINS) {
+    try {
+      const url = path.startsWith("http") ? path : `${domain}${path}`;
+      const res = await safeFetch(url, { headers: HEADERS });
+      if (res.ok) return { html: await res.text(), base: domain };
+      lastErr = `HTTP ${res.status}`;
+    } catch (e) {
+      lastErr = e.message || e;
+    }
+  }
+  throw new Error(`ManhwaRead failed. Last error: ${lastErr}`);
+}
+
+async function manhwareadLatest(page = 1) {
+  const path = page > 1 ? `/manhwa/page/${page}/` : "/manhwa/";
+  const { html, base } = await manhwareadTryDomains(path);
+  const $ = loadHtml(html);
+  const results = [];
+  $(".manga-item").each((_, el) => {
+    const $el = $(el);
+    const title =
+      $el.find("h3 a").first().text().trim() ||
+      $el.find(".manga-item__link").first().text().trim() ||
+      $el.find("img").first().attr("alt") || "";
+    const href =
+      $el.find("h3 a").first().attr("href") ||
+      $el.find('a[href*="/manhwa/"]').first().attr("href");
+    const imgEl = $el.find("img").first();
+    const image = imgEl.attr("src") || imgEl.attr("data-src") || "";
+    if (title && href)
+      results.push({
+        title,
+        image: absUrl(base, image),
+        url: absUrl(base, href),
+        source: "ManhwaRead",
+      });
+  });
+  return results;
+}
+
+async function manhwareadSearch(query) {
+  const { html, base } = await manhwareadTryDomains(
+    `/?s=${encodeURIComponent(query)}`,
+  );
+  const $ = loadHtml(html);
+  const results = [];
+  $(".manga-item").each((_, el) => {
+    const $el = $(el);
+    const title =
+      $el.find("h3 a").first().text().trim() ||
+      $el.find(".manga-item__link").first().text().trim() ||
+      $el.find("img").first().attr("alt") || "";
+    const href =
+      $el.find("h3 a").first().attr("href") ||
+      $el.find('a[href*="/manhwa/"]').first().attr("href");
+    const imgEl = $el.find("img").first();
+    const image = imgEl.attr("src") || imgEl.attr("data-src") || "";
+    if (title && href)
+      results.push({
+        title,
+        image: absUrl(base, image),
+        url: absUrl(base, href),
+        source: "ManhwaRead",
+      });
+  });
+  return results;
+}
+
+async function manhwareadDetails(url) {
+  const { html } = await manhwareadTryDomains(url);
+  const $ = loadHtml(html);
+  // Title: prefer h1 (skip site name), fallback to og:title cleaned
+  let title = "";
+  $("h1").each((_, el) => {
+    const t = $(el).text().trim();
+    if (t && t !== "ManhwaRead" && !title) title = t;
+  });
+  if (!title) {
+    const ogTitle = $('meta[property="og:title"]').attr("content") || "";
+    title = ogTitle.replace(/\s*-\s*#\d+\s*-\s*Read.*$/i, "").trim();
+  }
+  if (!title) title = $("title").text().trim();
+  const image = $('meta[property="og:image"]').attr("content") || "";
+  const description =
+    $('meta[property="og:description"]').attr("content") ||
+    $('meta[name="description"]').attr("content") ||
+    "";
+  const chapters = [];
+  const mangaBase = url.replace(/\/+$/, "");
+  $("a.chapter-item").each((_, el) => {
+    const href = $(el).attr("href");
+    if (!href) return;
+    const fullUrl = absUrl(url, href);
+    // Only include chapters belonging to this manga (skip sidebar items)
+    if (!fullUrl.startsWith(mangaBase + "/chapter")) return;
+    // Extract clean chapter name — strip dates, "New" badges, time ago
+    const rawText = $(el).text().replace(/\s+/g, " ").trim();
+    const name = rawText
+      .replace(/\s+\d{1,2}\/\d{1,2}\/\d{2,4}\b.*/g, "")
+      .replace(/\s+New\b.*/gi, "")
+      .replace(/\s+\d+[dwmy]\b.*/gi, "")
+      .trim();
+    if (name) chapters.push({ name, url: fullUrl });
+  });
+  return { title, image, description, chapters };
+}
+
+function decodeBase64Utf8(b64) {
+  try {
+    // atob is available in Hermes / modern RN
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new TextDecoder("utf-8").decode(bytes);
+  } catch {
+    try {
+      return CryptoJS.enc.Base64.parse(b64).toString(CryptoJS.enc.Utf8);
+    } catch {
+      return "[]";
+    }
+  }
+}
+
+async function manhwareadImages(chapterUrl) {
+  const { html } = await manhwareadTryDomains(chapterUrl);
+  const $ = loadHtml(html);
+
+  // Extract chapterData from inline script
+  let chapterDataRaw = null;
+  $("script").each((_, el) => {
+    const content = $(el).html() || "";
+    const match = content.match(/var chapterData\s*=\s*(\{[^;]+\})/);
+    if (match) {
+      try {
+        chapterDataRaw = JSON.parse(match[1]);
+      } catch {}
+    }
+  });
+
+  if (chapterDataRaw && chapterDataRaw.data) {
+    try {
+      const decoded = decodeBase64Utf8(chapterDataRaw.data);
+      const pages = JSON.parse(decoded);
+      const imgBase = (chapterDataRaw.base || "").replace(/\/+$/, "");
+      if (Array.isArray(pages)) {
+        return pages
+          .map((p) => (p?.src ? `${imgBase}/${p.src}` : ""))
+          .filter((u) => u.startsWith("http"));
+      }
+    } catch {
+      // Fall through to generic image extraction.
+    }
+  }
+
+  // Fallback: standard image selectors
+  return findChapterImages($, chapterUrl);
+}
+
+function dispatchLatest(source, page = 1, filters = {}) {
+  if (source === ALL_ID_SOURCE) {
+    return aggregateLatest(source, page, filters);
+  }
   switch (source) {
     case "Komikindo":
-      return komikindoLatest();
+      return komikindoLatest(page);
     case "BacaKomik":
-      return bacakomikLatest();
+      return bacakomikLatest(page, filters);
     case "Komik Station":
-      return mtLatest(source);
-    case "ManhwaDesu":
-      return mtLatest(source);
+      return mtLatest(source, page, filters);
     case "Komiku":
-      return komikuLatest();
+      return komikuLatest(page);
+    case "ManhwaRead":
+      return manhwareadLatest(page);
     case "MangaDex (JSON API)":
-      return mdLatest("en");
+      return mdLatest("en", page, filters);
     case "MangaDex (Bahasa Indonesia)":
-      return mdLatest("id");
+      return mdLatest("id", page, filters);
     case "Bato.to (ID)":
-      return batoLatest();
+      return batoLatest(page);
     default:
       return Promise.resolve([]);
   }
 }
 
-function dispatchSearch(source, query) {
+function dispatchSearch(source, query, filters = {}) {
+  if (source === ALL_ID_SOURCE) {
+    return aggregateSearch(source, query, filters);
+  }
   switch (source) {
     case "Komikindo":
       return komikindoSearch(query);
     case "BacaKomik":
-      return bacakomikSearch(query);
+      return bacakomikSearch(query, filters);
     case "Komik Station":
-      return mtSearch(source, query);
-    case "ManhwaDesu":
-      return mtSearch(source, query);
+      return mtSearch(source, query, filters);
     case "Komiku":
       return komikuSearch(query);
+    case "ManhwaRead":
+      return manhwareadSearch(query);
     case "MangaDex (JSON API)":
-      return mdSearch("en", query);
+      return mdSearch("en", query, filters);
     case "MangaDex (Bahasa Indonesia)":
-      return mdSearch("id", query);
+      return mdSearch("id", query, filters);
     case "Bato.to (ID)":
       return batoSearch(query);
     default:
@@ -1034,10 +1793,11 @@ function dispatchDetails(source, url) {
     case "BacaKomik":
       return bacakomikDetails(url);
     case "Komik Station":
-    case "ManhwaDesu":
       return mtDetails(url);
     case "Komiku":
       return komikuDetails(url);
+    case "ManhwaRead":
+      return manhwareadDetails(url);
     case "MangaDex (JSON API)":
       return mdDetails("en", url);
     case "MangaDex (Bahasa Indonesia)":
@@ -1061,10 +1821,11 @@ function dispatchImages(source, chapterUrl) {
     case "BacaKomik":
       return bacakomikImages(chapterUrl);
     case "Komik Station":
-    case "ManhwaDesu":
       return mtImages(chapterUrl);
     case "Komiku":
       return komikuImages(chapterUrl);
+    case "ManhwaRead":
+      return manhwareadImages(chapterUrl);
     case "MangaDex (JSON API)":
     case "MangaDex (Bahasa Indonesia)":
       return mdImages(chapterUrl);
@@ -1076,47 +1837,13 @@ function dispatchImages(source, chapterUrl) {
 }
 
 export const Scraper = {
-  fetchLatest: (source) => dispatchLatest(source),
-  fetchSearch: (source, query) => dispatchSearch(source, query),
+  fetchLatest: (source, page = 1, filters = {}) => dispatchLatest(source, page, filters),
+  fetchSearch: (source, query, filters = {}) => dispatchSearch(source, query, filters),
   fetchDetails: (source, url) => dispatchDetails(source, url),
   fetchImages: async (source, chapterUrl) => {
-    // #region agent log
-    debugLog(
-      "scrapers.js:fetchImages",
-      "enter",
-      {
-        source,
-        chapterUrlPreview: String(chapterUrl).slice(0, 120),
-        isHttp: String(chapterUrl).startsWith("http"),
-      },
-      "H3",
-    );
-    // #endregion
-    try {
-      const imgs = await dispatchImages(source, chapterUrl);
-      const arr = imgs || [];
-      // #region agent log
-      debugLog(
-        "scrapers.js:fetchImages",
-        "exit_ok",
-        {
-          count: arr.length,
-          firstPreview: arr[0] ? String(arr[0]).slice(0, 80) : null,
-        },
-        "H1",
-      );
-      // #endregion
-      return arr;
-    } catch (e) {
-      // #region agent log
-      debugLog(
-        "scrapers.js:fetchImages",
-        "exit_throw",
-        { name: e?.name, message: String(e?.message || e).slice(0, 220) },
-        "H2",
-      );
-      // #endregion
-      throw e;
-    }
+    const imgs = await dispatchImages(source, chapterUrl);
+    return Array.isArray(imgs)
+      ? imgs.filter((img) => typeof img === 'string' && img.trim())
+      : [];
   },
 };
