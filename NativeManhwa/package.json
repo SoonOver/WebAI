@@ -15,6 +15,8 @@
     "audit:buttons": "playwright test scripts/live-button-audit.spec.js --workers=1",
     "build:android:preview": "eas build --platform android --profile preview --non-interactive",
     "build:android:prod": "eas build --platform android --profile production --non-interactive",
+    "build:android:local": "powershell -ExecutionPolicy Bypass -File scripts/build-android-release.ps1",
+    "install:android:local": "powershell -ExecutionPolicy Bypass -File scripts/build-android-release.ps1 -Install",
     "build:ios:preview": "eas build --platform ios --profile preview --non-interactive",
     "update:preview": "eas update --channel preview",
     "update:production": "eas update --channel production"
