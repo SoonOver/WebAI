@@ -92,6 +92,7 @@ function safeObject(val) {
 const DEFAULT_SETTINGS = {
   autoAdvance: false,
   cacheEnabled: true,
+  imageQuality: 'sharp',
   readerMode: 'webtoon',
   theme: 'dark',
 };
@@ -125,6 +126,7 @@ function normalizeSettings(settings) {
   return {
     autoAdvance: settings?.autoAdvance === true,
     cacheEnabled: settings?.cacheEnabled !== false,
+    imageQuality: settings?.imageQuality === 'full' ? 'full' : 'sharp',
     readerMode: settings?.readerMode === 'manga' ? 'manga' : 'webtoon',
     theme: typeof settings?.theme === 'string' ? settings.theme : DEFAULT_SETTINGS.theme,
   };

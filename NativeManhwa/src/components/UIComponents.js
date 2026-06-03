@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, Image, Pressable, ScrollView, Platform, TouchableOpacity, StyleSheet, useWindowDimensions } from 'react-native';
+import { View, Text, Image, Pressable, ScrollView, Platform, TouchableOpacity, StyleSheet, useWindowDimensions, PixelRatio } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Ionicons } from '@expo/vector-icons';
 import { THEME } from '../theme';
@@ -34,6 +34,10 @@ const PROTECTED_IMAGE_CACHE_DIR = FileSystem.cacheDirectory
   ? `${FileSystem.cacheDirectory}imgcache/protected-images/`
   : null;
 const protectedImageDownloads = new Map();
+const HIGH_QUALITY_IMAGE_PROPS = Platform.OS === 'android'
+  ? { resizeMethod: 'scale', progressiveRenderingEnabled: true, fadeDuration: 0 }
+  : {};
+const DEVICE_PIXEL_RATIO = Math.max(1, PixelRatio.get());
 
 function protectedImageHash(value) {
   const text = String(value ?? '');
@@ -123,6 +127,7 @@ export function ProtectedImage({ uri, referer, style, resizeMode = 'cover', onEr
       source={source}
       style={style}
       resizeMode={resizeMode}
+      {...HIGH_QUALITY_IMAGE_PROPS}
       onError={onError}
     />
   );
@@ -137,39 +142,68 @@ function ImageFallback({ height = 300, width }) {
   );
 }
 
-export function AutoHeightImage({ source, referer, fit = 'width', topInset = 0, bottomInset = 0 }) {
+function nativePixelWidth(layoutWidth, naturalWidth, qualityMode) {
+  if (qualityMode !== 'sharp' || !naturalWidth || naturalWidth <= 0) return layoutWidth;
+  return Math.max(1, Math.min(layoutWidth, naturalWidth / DEVICE_PIXEL_RATIO));
+}
+
+export function AutoHeightImage({
+  source,
+  referer,
+  fit = 'width',
+  topInset = 0,
+  bottomInset = 0,
+  qualityMode = 'sharp',
+}) {
   const { width, height: windowHeight } = useWindowDimensions();
   const sourceUri = typeof source === 'string' ? source : '';
   const imageUri = useProtectedImageUri(sourceUri, referer);
-  const [height, setHeight] = useState(300);
+  const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
   const [failed, setFailed] = useState(false);
   const canUseHeaders = Platform.OS !== 'web';
   useEffect(() => {
     setFailed(false);
+    setNaturalSize({ width: 0, height: 0 });
     if (!imageUri) {
       setFailed(true);
       return;
     }
-    const setMeasuredHeight = (w, h) => {
-      setHeight(w > 0 && h > 0 ? h * (width / w) : 400);
+    const setMeasuredSize = (w, h) => {
+      setNaturalSize(w > 0 && h > 0 ? { width: w, height: h } : { width: 0, height: 0 });
     };
     if (imageUri.startsWith('file://') || imageUri.startsWith('content://')) {
-      Image.getSize(imageUri, setMeasuredHeight, () => setHeight(400));
+      Image.getSize(imageUri, setMeasuredSize, () => setNaturalSize({ width: 0, height: 0 }));
     } else if (canUseHeaders && typeof Image.getSizeWithHeaders === 'function') {
       const headers = imageHeaders(referer, imageUri);
       Image.getSizeWithHeaders(
         imageUri,
         headers || {},
-        setMeasuredHeight,
-        () => setHeight(400)
+        setMeasuredSize,
+        () => setNaturalSize({ width: 0, height: 0 })
       );
     } else {
-      Image.getSize(imageUri, setMeasuredHeight, () => setHeight(400));
+      Image.getSize(imageUri, setMeasuredSize, () => setNaturalSize({ width: 0, height: 0 }));
     }
-  }, [canUseHeaders, imageUri, referer, width]);
+  }, [canUseHeaders, imageUri, referer]);
   const resolvedImageSource = imageSource(imageUri, referer);
+  const hasNaturalSize = naturalSize.width > 0 && naturalSize.height > 0;
+  const displayWidth = nativePixelWidth(width, naturalSize.width, qualityMode);
+  const displayHeight = hasNaturalSize
+    ? naturalSize.height * (displayWidth / naturalSize.width)
+    : 400;
   if (fit === 'contain') {
     const frameHeight = Math.max(260, windowHeight - topInset - bottomInset);
+    const naturalWidthDp = hasNaturalSize ? naturalSize.width / DEVICE_PIXEL_RATIO : 0;
+    const naturalHeightDp = hasNaturalSize ? naturalSize.height / DEVICE_PIXEL_RATIO : 0;
+    const sharpScale = hasNaturalSize
+      ? Math.min(1, width / naturalWidthDp, frameHeight / naturalHeightDp)
+      : 1;
+    const containWidth = qualityMode === 'sharp' && hasNaturalSize
+      ? naturalWidthDp * sharpScale
+      : width;
+    const containHeight = qualityMode === 'sharp' && hasNaturalSize
+      ? naturalHeightDp * sharpScale
+      : frameHeight;
     return (
       <View style={[styles.containImageFrame, { width, minHeight: windowHeight, paddingTop: topInset, paddingBottom: bottomInset }]}>
         {!imageUri || failed ? (
@@ -177,8 +211,9 @@ export function AutoHeightImage({ source, referer, fit = 'width', topInset = 0, 
         ) : (
           <Image
             source={resolvedImageSource}
-            style={{ width, height: frameHeight }}
+            style={{ width: containWidth, height: containHeight }}
             resizeMode="contain"
+            {...HIGH_QUALITY_IMAGE_PROPS}
             onError={() => setFailed(true)}
           />
         )}
@@ -189,12 +224,15 @@ export function AutoHeightImage({ source, referer, fit = 'width', topInset = 0, 
     return <ImageFallback height={300} width={width} />;
   }
   return (
-    <Image
-      source={resolvedImageSource}
-      style={{ width, height }}
-      resizeMode="contain"
-      onError={() => setFailed(true)}
-    />
+    <View style={[styles.autoImageFrame, { width }]}>
+      <Image
+        source={resolvedImageSource}
+        style={{ width: displayWidth, height: displayHeight }}
+        resizeMode="contain"
+        {...HIGH_QUALITY_IMAGE_PROPS}
+        onError={() => setFailed(true)}
+      />
+    </View>
   );
 }
 
@@ -415,6 +453,7 @@ export function MangaCard({ item, onPress }) {
           <Image
             source={imageSource(imageUri, itemUrl)}
             style={styles.image}
+            {...HIGH_QUALITY_IMAGE_PROPS}
             onError={() => setImageFailed(true)}
           />
         ) : (
@@ -702,6 +741,10 @@ const styles = StyleSheet.create({
   containImageFrame: {
     backgroundColor: '#000',
     justifyContent: 'center',
+    alignItems: 'center',
+  },
+  autoImageFrame: {
+    backgroundColor: '#000',
     alignItems: 'center',
   },
   sourceBadge: {

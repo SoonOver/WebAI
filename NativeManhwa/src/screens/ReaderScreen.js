@@ -61,6 +61,7 @@ export default function ReaderScreen({ route, navigation }) {
   const [settings, setSettings] = useState({
     autoAdvance: false,
     cacheEnabled: true,
+    imageQuality: 'sharp',
     readerMode: 'webtoon',
   });
   const settingsRef = useRef(settings);
@@ -328,6 +329,7 @@ export default function ReaderScreen({ route, navigation }) {
               fit={mode === 'manga' ? 'contain' : 'width'}
               topInset={mode === 'manga' ? headerPadTop + 58 : 0}
               bottomInset={mode === 'manga' ? insets.bottom + THEME.space.sm : 0}
+              qualityMode={settings.imageQuality}
             />
           )}
         />

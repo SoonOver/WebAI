@@ -17,6 +17,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { THEME } from '../theme';
 import { ScreenHeader } from '../components/UIComponents';
 import { Storage, DownloadManager } from '../storage';
+import {
+  canUseAppUpdates,
+  checkForAppUpdate,
+  reloadAppUpdate,
+} from '../services/appUpdates';
 
 const APP_VERSION = '1.1.0';
 const CACHE_DIR = FileSystem.cacheDirectory
@@ -28,11 +33,13 @@ export default function SettingsScreen() {
   const [settings, setSettings] = useState({
     autoAdvance: false,
     cacheEnabled: true,
+    imageQuality: 'sharp',
     readerMode: 'webtoon',
     theme: 'dark',
   });
   const [cacheInfo, setCacheInfo] = useState({ exists: false, count: 0 });
   const [historyCount, setHistoryCount] = useState(0);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
 
   const loadSettings = useCallback(async () => {
     try {
@@ -135,6 +142,37 @@ export default function SettingsScreen() {
     );
   };
 
+  const handleCheckUpdates = async () => {
+    if (!canUseAppUpdates()) {
+      Alert.alert(
+        'App updates',
+        'OTA updates are available in installed preview or production builds.'
+      );
+      return;
+    }
+
+    setCheckingUpdate(true);
+    try {
+      const result = await checkForAppUpdate();
+      if (result.status === 'ready') {
+        Alert.alert(
+          'Update ready',
+          'A new update has been downloaded. Restart the app now?',
+          [
+            { text: 'Later', style: 'cancel' },
+            { text: 'Restart', onPress: reloadAppUpdate },
+          ]
+        );
+      } else {
+        Alert.alert('App updates', 'You are already on the latest update.');
+      }
+    } catch {
+      Alert.alert('App updates', 'Unable to check for updates right now.');
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
   const cacheStatusLabel = () => {
     if (!CACHE_AVAILABLE) return 'Native only';
     if (!cacheInfo.exists) return 'Empty';
@@ -145,6 +183,7 @@ export default function SettingsScreen() {
 
   const hasCache = CACHE_AVAILABLE && cacheInfo.exists && cacheInfo.count > 0;
   const hasHistory = historyCount > 0;
+  const updatesAvailable = canUseAppUpdates();
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
@@ -212,6 +251,45 @@ export default function SettingsScreen() {
               />
               <Text style={styles.modeBtnText}>
                 {settings.readerMode === 'manga' ? 'Page' : 'Webtoon'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.row}>
+            <View style={styles.rowLeft}>
+              <View style={styles.iconWrap}>
+                <Ionicons
+                  name="image-outline"
+                  size={20}
+                  color={THEME.primary}
+                />
+              </View>
+              <View style={styles.rowText}>
+                <Text style={styles.rowLabel}>Image quality</Text>
+                <Text style={styles.rowDescription}>
+                  {settings.imageQuality === 'sharp'
+                    ? 'Sharp source pixels'
+                    : 'Full screen width'}
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              style={styles.modeBtn}
+              onPress={() =>
+                updateSetting(
+                  'imageQuality',
+                  settings.imageQuality === 'sharp' ? 'full' : 'sharp',
+                )
+              }
+              activeOpacity={0.75}
+            >
+              <Ionicons
+                name={settings.imageQuality === 'sharp' ? 'scan' : 'expand'}
+                size={16}
+                color={THEME.text}
+              />
+              <Text style={styles.modeBtnText}>
+                {settings.imageQuality === 'sharp' ? 'Sharp' : 'Full'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -348,6 +426,44 @@ export default function SettingsScreen() {
               </View>
             </View>
           </View>
+
+          <View style={styles.row}>
+            <View style={styles.rowLeft}>
+              <View style={styles.iconWrap}>
+                <Ionicons
+                  name="cloud-download-outline"
+                  size={20}
+                  color={updatesAvailable ? THEME.success : THEME.textMuted}
+                />
+              </View>
+              <View style={styles.rowText}>
+                <Text style={styles.rowLabel}>App updates</Text>
+                <Text style={styles.rowDescription}>
+                  {updatesAvailable
+                    ? 'Auto-checks on launch via EAS Update'
+                    : 'Available in installed Android and iOS builds'}
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              style={[
+                styles.updateBtn,
+                checkingUpdate && styles.updateBtnDisabled,
+              ]}
+              onPress={handleCheckUpdates}
+              disabled={checkingUpdate}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={[
+                  styles.updateBtnText,
+                  checkingUpdate && styles.updateBtnTextDisabled,
+                ]}
+              >
+                {checkingUpdate ? 'Checking' : 'Check'}
+              </Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         <View style={styles.bottomSpacer} />
@@ -449,6 +565,25 @@ const styles = StyleSheet.create({
     color: THEME.text,
     fontSize: 13,
     fontWeight: '700',
+  },
+  updateBtn: {
+    backgroundColor: THEME.primaryDark,
+    paddingVertical: THEME.space.sm,
+    paddingHorizontal: THEME.space.lg,
+    borderRadius: THEME.radius.sm,
+  },
+  updateBtnDisabled: {
+    backgroundColor: THEME.surface,
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
+  updateBtnText: {
+    color: THEME.text,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  updateBtnTextDisabled: {
+    color: THEME.textMuted,
   },
   bottomSpacer: {
     height: THEME.space.xl * 4,
