@@ -721,27 +721,53 @@ async function getMangaDexTagMap() {
   return mangaDexTagMapPromise;
 }
 
+function cleanImageAttr(value) {
+  return String(value || "").trim();
+}
+
+function srcsetCandidates(srcset) {
+  return String(srcset || "")
+    .split(",")
+    .map((entry) => {
+      const [url, descriptor = ""] = entry.trim().split(/\s+/);
+      const widthMatch = descriptor.match(/^(\d+)w$/i);
+      const densityMatch = descriptor.match(/^(\d+(?:\.\d+)?)x$/i);
+      const score = widthMatch
+        ? Number(widthMatch[1])
+        : densityMatch
+          ? Number(densityMatch[1]) * 1000
+          : 0;
+      return { url: cleanImageAttr(url), score };
+    })
+    .filter((candidate) => candidate.url);
+}
+
+function bestSrcsetImage(...srcsets) {
+  return srcsets
+    .flatMap(srcsetCandidates)
+    .sort((a, b) => b.score - a.score)[0]?.url || "";
+}
+
 function imgAttr($, el) {
   const $el = $(el);
-  const direct = (
-    $el.attr("data-src") ||
-    $el.attr("data-lazy-src") ||
-    $el.attr("data-fallback") ||
-    $el.attr("data-original") ||
-    $el.attr("data-original-src") ||
-    $el.attr("data-thumb") ||
-    $el.attr("data-image") ||
-    $el.attr("data-cfsrc") ||
-    $el.attr("src") ||
-    ""
-  ).trim();
-  if (direct) return direct;
+  const preferredDirect = [
+    $el.attr("data-original"),
+    $el.attr("data-original-src"),
+    $el.attr("data-image"),
+  ].map(cleanImageAttr).find(Boolean);
+  if (preferredDirect) return preferredDirect;
 
-  const srcset = $el.attr("data-srcset") || $el.attr("srcset") || "";
-  return String(srcset)
-    .split(",")
-    .map((entry) => entry.trim().split(/\s+/)[0])
-    .find(Boolean) || "";
+  const bestResponsive = bestSrcsetImage($el.attr("data-srcset"), $el.attr("srcset"));
+  if (bestResponsive) return bestResponsive;
+
+  return [
+    $el.attr("data-src"),
+    $el.attr("data-lazy-src"),
+    $el.attr("data-fallback"),
+    $el.attr("data-cfsrc"),
+    $el.attr("src"),
+    $el.attr("data-thumb"),
+  ].map(cleanImageAttr).find(Boolean) || "";
 }
 
 function isLikelyNonCoverImage(value) {
@@ -758,27 +784,19 @@ function isLikelyNonCoverImage(value) {
 function imageCandidates($, el) {
   const $el = $(el);
   const candidates = [
+    $el.attr("data-original"),
+    $el.attr("data-original-src"),
+    $el.attr("data-image"),
+    bestSrcsetImage($el.attr("data-srcset"), $el.attr("srcset")),
     $el.attr("data-src"),
     $el.attr("data-lazy-src"),
     $el.attr("data-fallback"),
-    $el.attr("data-original"),
-    $el.attr("data-original-src"),
-    $el.attr("data-thumb"),
-    $el.attr("data-image"),
     $el.attr("data-cfsrc"),
     $el.attr("src"),
+    $el.attr("data-thumb"),
   ];
 
-  for (const srcset of [$el.attr("data-srcset"), $el.attr("srcset")]) {
-    if (!srcset) continue;
-    candidates.push(
-      ...String(srcset)
-        .split(",")
-        .map((entry) => entry.trim().split(/\s+/)[0])
-    );
-  }
-
-  return candidates.filter(Boolean);
+  return candidates.map(cleanImageAttr).filter(Boolean);
 }
 
 function firstUsableCoverImage($, root, baseUrl) {
@@ -1769,8 +1787,7 @@ async function batoImages(chapterUrl) {
   const $ = loadHtml(html);
   const images = [];
   $("img").each((_, el) => {
-    const u =
-      $(el).attr("data-src") || $(el).attr("src") || "";
+    const u = imgAttr($, el);
     if (
       u &&
       (u.includes("cdn") || u.includes("manga") || u.includes("chapter")) &&

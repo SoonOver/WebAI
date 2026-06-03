@@ -1,6 +1,6 @@
 {
   "name": "nativemanhwa",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "main": "index.js",
   "scripts": {
     "start": "expo start",
@@ -10,6 +10,7 @@
     "postinstall": "node scripts/prepare-hermesc.mjs",
     "prepare:hermesc": "node scripts/prepare-hermesc.mjs",
     "audit:providers": "node scripts/audit-providers.mjs",
+    "audit:version": "node scripts/audit-version.mjs",
     "audit:live": "playwright test scripts/live-feature-audit.spec.js --workers=1",
     "audit:buttons": "playwright test scripts/live-button-audit.spec.js --workers=1",
     "build:android:preview": "eas build --platform android --profile preview --non-interactive",

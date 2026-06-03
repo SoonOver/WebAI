@@ -1,6 +1,7 @@
 const { test, expect } = require('@playwright/test');
 const fs = require('fs');
 const path = require('path');
+const { version: APP_VERSION } = require('../package.json');
 
 const BASE_URL = process.env.AUDIT_URL || 'http://localhost:19006';
 const OUT_DIR = process.env.AUDIT_OUT || process.cwd();
@@ -214,12 +215,15 @@ test('NativeManhwa live feature audit', async ({ page }) => {
   for (const label of ['Auto-advance', 'Default reader mode', 'Image caching', 'Cache status', 'Reading history', 'NativeManhwa']) {
     expect(text).toContain(label);
   }
+  const versionLabel = page.getByText(`Version ${APP_VERSION}`, { exact: true });
+  await versionLabel.scrollIntoViewIfNeeded();
+  await expect(versionLabel).toBeVisible({ timeout: 10000 });
   await clickVisibleText(page, text.includes('Webtoon') ? 'Webtoon' : 'Page');
   await page.waitForTimeout(1000);
   text = await bodyText(page);
   expect(text.includes('Webtoon') || text.includes('Page')).toBeTruthy();
   await page.screenshot({ path: outFile('nativemanhwa-live-settings.png') });
-  results.push('Settings renders reading/cache/history/about controls and reader mode toggles');
+  results.push(`Settings renders controls, reader mode toggles, and app version ${APP_VERSION}`);
 
   await expectNoConsoleErrors(consoleErrors, 'final');
   fs.writeFileSync(

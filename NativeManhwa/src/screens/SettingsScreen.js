@@ -23,7 +23,7 @@ import {
   reloadAppUpdate,
 } from '../services/appUpdates';
 
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.1.1';
 const CACHE_DIR = FileSystem.cacheDirectory
   ? `${FileSystem.cacheDirectory}imgcache/`
   : null;

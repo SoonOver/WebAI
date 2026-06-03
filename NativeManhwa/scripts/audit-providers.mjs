@@ -1,7 +1,46 @@
+import fs from 'node:fs';
 import { Scraper, SOURCE_ORDER, HEADERS } from '../scrapers.js';
 
-const MAX_CANDIDATES = 8;
+const SERIES_PER_SOURCE = positiveInt(process.env.AUDIT_SERIES_PER_SOURCE, 3);
+const MIN_SERIES_PER_SOURCE = positiveInt(
+  process.env.AUDIT_MIN_SERIES_PER_SOURCE,
+  Math.min(2, SERIES_PER_SOURCE),
+);
+const MAX_CANDIDATES = positiveInt(
+  process.env.AUDIT_MAX_CANDIDATES,
+  Math.max(12, SERIES_PER_SOURCE * 5),
+);
+const PANEL_SAMPLE_PER_CHAPTER = positiveInt(process.env.AUDIT_PANEL_SAMPLE_PER_CHAPTER, 1);
 const IMAGE_PROBE_BYTES = 'bytes=0-65535';
+const TRANSIENT_RETRY_DELAYS_MS = [4000, 10000, 20000];
+
+function positiveInt(value, fallback) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientError(error) {
+  const message = String(error?.message || error);
+  return /HTTP 429|rate limit|too many requests|ECONNRESET|ETIMEDOUT|fetch failed/i.test(message);
+}
+
+async function retryTransient(label, operation) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= TRANSIENT_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (!isTransientError(error) || attempt >= TRANSIENT_RETRY_DELAYS_MS.length) break;
+      await sleep(TRANSIENT_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+  throw new Error(`${label}: ${String(lastError?.message || lastError)}`);
+}
 
 function imageProbeReferer(url, referer) {
   if (/merrypsycho\.xyz/i.test(String(url || ''))) {
@@ -35,6 +74,9 @@ async function probeImage(url, referer) {
   const response = await fetch(url, {
     headers,
   });
+  if (response.status === 429) {
+    throw new Error('HTTP 429');
+  }
   const bytes = await response.arrayBuffer();
   const buffer = Buffer.from(bytes);
   const contentType = response.headers.get('content-type') || '';
@@ -48,6 +90,35 @@ async function probeImage(url, referer) {
     dimensions,
     lowResolution: Boolean(dimensions?.width && dimensions.width < 900),
   };
+}
+
+async function probeOptionalImage(url, referer) {
+  if (!url) {
+    return {
+      ok: false,
+      status: 0,
+      contentType: '',
+      bytes: 0,
+      isImage: false,
+      dimensions: null,
+      lowResolution: false,
+      error: 'Missing image URL',
+    };
+  }
+  try {
+    return await probeImage(url, referer);
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      contentType: '',
+      bytes: 0,
+      isImage: false,
+      dimensions: null,
+      lowResolution: false,
+      error: String(error?.message || error).slice(0, 240),
+    };
+  }
 }
 
 function imageDimensions(buffer) {
@@ -124,66 +195,115 @@ function webpDimensions(buffer) {
   return null;
 }
 
+async function checkManga(source, item) {
+  const itemSource = item.source || source;
+  const details = await retryTransient(
+    `${itemSource} details ${item.title || item.url}`,
+    () => Scraper.fetchDetails(itemSource, item.url),
+  );
+  const chapters = Array.isArray(details?.chapters)
+    ? details.chapters.filter((chapter) => chapter?.url)
+    : [];
+  if (chapters.length === 0) throw new Error('No readable chapters');
+
+  const coverUrl = details.image || item.image || '';
+  const cover = await probeOptionalImage(coverUrl, item.url);
+  const checks = [];
+  for (const target of pickChapterChecks(chapters)) {
+    const images = await retryTransient(
+      `${itemSource} images ${target.chapter.name}`,
+      () => Scraper.fetchImages(itemSource, target.chapter.url),
+    );
+    if (!Array.isArray(images) || images.length === 0) {
+      throw new Error(`${target.label} ${target.chapter.name}: no images`);
+    }
+    const sampledImages = images.slice(0, PANEL_SAMPLE_PER_CHAPTER);
+    const panelSamples = [];
+    for (const imageUrl of sampledImages) {
+      const imageProbe = await retryTransient(
+        `${itemSource} panel ${target.chapter.name}`,
+        () => probeImage(imageUrl, target.chapter.url),
+      );
+      if (!imageProbe.ok || !imageProbe.isImage || imageProbe.bytes === 0) {
+        throw new Error(
+          `${target.label} ${target.chapter.name}: panel probe failed ${imageProbe.status} ${imageProbe.contentType}`,
+        );
+      }
+      panelSamples.push({
+        url: imageUrl,
+        ...imageProbe,
+      });
+    }
+    checks.push({
+      label: target.label,
+      chapter: target.chapter.name,
+      panelCount: images.length,
+      panelSamples,
+    });
+  }
+
+  return {
+    title: details.title || item.title,
+    url: item.url,
+    source: itemSource,
+    coverUrl,
+    cover,
+    coverOk: cover.ok && cover.isImage && cover.bytes > 0,
+    chapterCount: chapters.length,
+    firstChapter: chapters[0]?.name,
+    lastChapter: chapters[chapters.length - 1]?.name,
+    checks,
+  };
+}
+
 async function checkSource(source) {
-  const latest = await Scraper.fetchLatest(source, 1, {});
+  const latest = await retryTransient(
+    `${source} catalog`,
+    () => Scraper.fetchLatest(source, 1, {}),
+  );
   const candidates = Array.isArray(latest)
     ? latest.filter((item) => item?.url).slice(0, MAX_CANDIDATES)
     : [];
   const skippedCandidates = [];
+  const series = [];
 
   for (const item of candidates) {
     try {
-      const details = await Scraper.fetchDetails(item.source || source, item.url);
-      const chapters = Array.isArray(details?.chapters)
-        ? details.chapters.filter((chapter) => chapter?.url)
-        : [];
-      if (chapters.length === 0) throw new Error('No readable chapters');
-
-      const checks = [];
-      for (const target of pickChapterChecks(chapters)) {
-        const images = await Scraper.fetchImages(item.source || source, target.chapter.url);
-        if (!Array.isArray(images) || images.length === 0) {
-          throw new Error(`${target.label} ${target.chapter.name}: no images`);
-        }
-        const firstImage = await probeImage(images[0], target.chapter.url);
-        if (!firstImage.ok || !firstImage.isImage || firstImage.bytes === 0) {
-          throw new Error(
-            `${target.label} ${target.chapter.name}: first panel probe failed ${firstImage.status} ${firstImage.contentType}`,
-          );
-        }
-        checks.push({
-          label: target.label,
-          chapter: target.chapter.name,
-          panelCount: images.length,
-          firstImage,
-        });
-      }
-
-      return {
-        source,
-        ok: true,
-        title: details.title || item.title,
-        catalogCount: latest.length,
-        chapterCount: chapters.length,
-        firstChapter: chapters[0]?.name,
-        lastChapter: chapters[chapters.length - 1]?.name,
-        checks,
-        skippedCandidates,
-      };
+      series.push(await checkManga(source, item));
+      if (series.length >= SERIES_PER_SOURCE) break;
     } catch (error) {
       skippedCandidates.push({
         title: item.title,
+        url: item.url,
         error: String(error?.message || error).slice(0, 240),
       });
     }
   }
 
+  const requiredSeries = Math.min(SERIES_PER_SOURCE, candidates.length);
+  const minimumSeries = Math.min(MIN_SERIES_PER_SOURCE, requiredSeries);
+  const complete = requiredSeries > 0 && series.length >= requiredSeries;
+  const ok = requiredSeries > 0 && series.length >= minimumSeries;
+  const degraded = ok && !complete;
+  const warnings = degraded
+    ? [
+        `Only ${series.length}/${requiredSeries} requested series passed. Skipped candidates usually indicate stale provider entries, broken upstream images, or rate limits.`,
+      ]
+    : [];
+
   return {
     source,
-    ok: false,
+    ok,
+    complete,
+    degraded,
     catalogCount: latest?.length || 0,
+    sampledSeries: series.length,
+    requiredSeries,
+    minimumSeries,
+    series,
     skippedCandidates,
-    error: skippedCandidates.at(-1)?.error || 'No valid candidates',
+    warnings,
+    error: ok ? undefined : skippedCandidates.at(-1)?.error || 'No valid candidates',
   };
 }
 
@@ -195,12 +315,18 @@ for (const source of SOURCE_ORDER) {
     results.push({
       source,
       ok: false,
+      complete: false,
+      degraded: false,
       error: String(error?.message || error).slice(0, 240),
     });
   }
 }
 
-console.log(JSON.stringify(results, null, 2));
+const output = JSON.stringify(results, null, 2);
+console.log(output);
+if (process.env.AUDIT_OUTPUT) {
+  fs.writeFileSync(process.env.AUDIT_OUTPUT, `${output}\n`);
+}
 
 const failed = results.filter((result) => !result.ok);
 if (failed.length > 0) {
