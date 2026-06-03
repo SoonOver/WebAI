@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Scraper, SOURCE_ORDER, sourceShortLabel } from '../../scrapers';
+import { Scraper, SOURCE_ORDER, sourceShortLabel, sortChaptersByNumber } from '../../scrapers';
 
 const PROVIDER_HEALTH_KEY = '@provider_health';
 const HEALTH_STALE_MS = 6 * 60 * 60 * 1000;
@@ -87,6 +87,7 @@ async function scanOneProvider(source) {
     const chapters = Array.isArray(details?.chapters)
       ? details.chapters.filter((chapter) => chapter?.url)
       : [];
+    const orderedChapters = sortChaptersByNumber(chapters, 'desc');
     if (chapters.length === 0) {
       return {
         source,
@@ -98,7 +99,8 @@ async function scanOneProvider(source) {
       };
     }
 
-    const images = await Scraper.fetchImages(candidate.source || source, chapters[0].url);
+    const latestChapter = orderedChapters[0] || chapters[0];
+    const images = await Scraper.fetchImages(candidate.source || source, latestChapter.url);
     const panelCount = Array.isArray(images) ? images.filter(Boolean).length : 0;
     if (panelCount === 0) {
       return {

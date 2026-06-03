@@ -327,6 +327,26 @@ function cleanMangaTitle(value) {
     .trim();
 }
 
+export function chapterSortNumber(chapter) {
+  const name = String(chapter?.name || chapter?.title || "");
+  const match =
+    name.match(/(?:ch(?:apter)?\.?\s*)(\d+(?:\.\d+)?)/i) ||
+    name.match(/(\d+(?:\.\d+)?)/);
+  const parsed = Number.parseFloat(match?.[1] || "");
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+export function compareChaptersByNumber(a, b, order = "desc") {
+  const diff = chapterSortNumber(b) - chapterSortNumber(a);
+  if (diff !== 0) return order === "asc" ? -diff : diff;
+  const fallback = (a?._sourceIndex || 0) - (b?._sourceIndex || 0);
+  return order === "asc" ? -fallback : fallback;
+}
+
+export function sortChaptersByNumber(chapters = [], order = "desc") {
+  return [...chapters].sort((a, b) => compareChaptersByNumber(a, b, order));
+}
+
 const SEARCH_ALIAS_GROUPS = [
   [
     "the great estate developer",

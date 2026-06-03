@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { Scraper, SOURCE_ORDER, HEADERS } from '../scrapers.js';
+import { Scraper, SOURCE_ORDER, HEADERS, sortChaptersByNumber } from '../scrapers.js';
 
 const SERIES_PER_SOURCE = positiveInt(process.env.AUDIT_SERIES_PER_SOURCE, 3);
 const MIN_SERIES_PER_SOURCE = positiveInt(
@@ -50,7 +50,10 @@ function imageProbeReferer(url, referer) {
 }
 
 function pickChapterChecks(chapters) {
-  const valid = chapters.filter((chapter) => chapter?.url);
+  const valid = sortChaptersByNumber(
+    chapters.filter((chapter) => chapter?.url),
+    'desc',
+  );
   if (valid.length <= 2) {
     return valid.map((chapter, index) => ({
       label: index === 0 ? 'latest' : 'oldest',
@@ -250,8 +253,8 @@ async function checkManga(source, item) {
     cover,
     coverOk: cover.ok && cover.isImage && cover.bytes > 0,
     chapterCount: chapters.length,
-    firstChapter: chapters[0]?.name,
-    lastChapter: chapters[chapters.length - 1]?.name,
+    firstChapter: sortChaptersByNumber(chapters, 'desc')[0]?.name,
+    lastChapter: sortChaptersByNumber(chapters, 'asc')[0]?.name,
     checks,
   };
 }
