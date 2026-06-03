@@ -8,6 +8,7 @@ import {
   RefreshControl,
   Alert,
   StyleSheet,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -21,6 +22,7 @@ import {
   MangaCard,
   EmptyState,
   ProtectedImage,
+  getGridColumnCount,
 } from '../components/UIComponents';
 
 const DOWNLOADS_META_KEY = '@downloads_meta';
@@ -52,6 +54,8 @@ function textOr(value, fallback = '') {
 }
 
 export default function LibraryScreen({ navigation }) {
+  const { width } = useWindowDimensions();
+  const bookmarkColumns = getGridColumnCount(width);
   const [activeTab, setActiveTab] = useState('bookmarks');
   const [bookmarks, setBookmarks] = useState([]);
   const [downloads, setDownloads] = useState([]);
@@ -202,6 +206,7 @@ export default function LibraryScreen({ navigation }) {
       <View style={styles.bookmarkItemWrap}>
         <MangaCard
           item={item}
+          columns={bookmarkColumns}
           onPress={() =>
             navigation.navigate('Details', {
               url: item.url,
@@ -221,7 +226,7 @@ export default function LibraryScreen({ navigation }) {
         </TouchableOpacity>
       </View>
     ),
-    [navigation, removeBookmark],
+    [bookmarkColumns, navigation, removeBookmark],
   );
 
   const renderDownloadItem = useCallback(
@@ -386,15 +391,15 @@ export default function LibraryScreen({ navigation }) {
       {renderTabBar()}
       {activeTab === 'bookmarks' ? (
         <FlatList
-          key="bookmarks"
+          key={`bookmarks-${bookmarkColumns}`}
           data={bookmarks}
           keyExtractor={keyExtractor}
-          numColumns={2}
+          numColumns={bookmarkColumns}
           contentContainerStyle={[
             styles.list,
             bookmarks.length === 0 && styles.listFlex,
           ]}
-          columnWrapperStyle={styles.row}
+          columnWrapperStyle={bookmarkColumns > 1 ? styles.row : undefined}
           renderItem={renderBookmarkItem}
           ListEmptyComponent={
             <EmptyState

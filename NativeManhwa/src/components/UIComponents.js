@@ -41,6 +41,8 @@ const DEVICE_PIXEL_RATIO = Math.max(1, PixelRatio.get());
 const SHARP_MAX_UPSCALE = 1.35;
 const IMAGE_DIMENSION_RANGE = 'bytes=0-65535';
 const LOCAL_IMAGE_PROBE_LENGTH = 65536;
+const GRID_MIN_CARD_WIDTH = 148;
+const GRID_MAX_CARD_WIDTH = 196;
 
 function protectedImageHash(value) {
   const text = String(value ?? '');
@@ -274,6 +276,23 @@ function nativePixelWidth(layoutWidth, naturalWidth, qualityMode) {
   return Math.max(1, Math.min(layoutWidth, (naturalWidth * SHARP_MAX_UPSCALE) / DEVICE_PIXEL_RATIO));
 }
 
+export function getGridColumnCount(width) {
+  if (width < 330) return 1;
+  if (width >= 1180) return 5;
+  if (width >= 900) return 4;
+  if (width >= 680) return 3;
+  return 2;
+}
+
+function gridCardWidth(width, columns) {
+  const columnCount = Math.max(1, columns || getGridColumnCount(width));
+  const listPadding = THEME.space.sm * 2;
+  const rowGaps = THEME.space.md * Math.max(0, columnCount - 1);
+  const available = Math.max(0, width - listPadding - rowGaps);
+  const rawWidth = available / columnCount;
+  return Math.max(GRID_MIN_CARD_WIDTH, Math.min(GRID_MAX_CARD_WIDTH, rawWidth));
+}
+
 function isLikelyScaledImageSize(size) {
   return Platform.OS === 'android' && size?.width > 0 && size.width < 480;
 }
@@ -467,6 +486,7 @@ export function SourceSegment({ value, onChange }) {
     <ScrollView
       ref={scrollRef}
       horizontal
+      style={styles.sourceBar}
       showsHorizontalScrollIndicator={false}
       contentContainerStyle={styles.sourceBarScroll}
       nestedScrollEnabled
@@ -642,9 +662,9 @@ export function ScreenHeader({ title, subtitle }) {
   );
 }
 
-export function MangaCard({ item, onPress }) {
+export function MangaCard({ item, onPress, columns }) {
   const { width } = useWindowDimensions();
-  const cardWidth = Math.max(140, (width - THEME.space.md * 3) / 2);
+  const cardWidth = gridCardWidth(width, columns);
   const sourceImageUri = typeof item?.image === 'string' ? item.image : '';
   const itemUrl = typeof item?.url === 'string' ? item.url : '';
   const imageUri = useProtectedImageUri(sourceImageUri, itemUrl);
@@ -687,6 +707,12 @@ export function MangaCard({ item, onPress }) {
 }
 
 const styles = StyleSheet.create({
+  sourceBar: {
+    flexGrow: 0,
+    flexShrink: 0,
+    minHeight: 50,
+    maxHeight: 56,
+  },
   sourceBarScroll: {
     flexDirection: 'row',
     alignItems: 'center',

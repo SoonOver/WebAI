@@ -8,6 +8,7 @@ import {
   RefreshControl,
   StyleSheet,
   Platform,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -19,6 +20,7 @@ import {
   CatalogFilters,
   MangaCard,
   EmptyState,
+  getGridColumnCount,
 } from '../components/UIComponents';
 
 const DEFAULT_SOURCE = Platform.OS === 'web' ? 'MangaDex (Bahasa Indonesia)' : ALL_ID_SOURCE;
@@ -54,6 +56,8 @@ function mergeMangaLists(current = [], next = []) {
 }
 
 export default function HomeScreen({ navigation }) {
+  const { width } = useWindowDimensions();
+  const gridColumns = getGridColumnCount(width);
   const [manga, setManga] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -161,6 +165,7 @@ export default function HomeScreen({ navigation }) {
     ({ item }) => (
       <MangaCard
         item={item}
+        columns={gridColumns}
         onPress={() =>
           navigation.navigate('Details', {
             url: item?.url,
@@ -171,7 +176,7 @@ export default function HomeScreen({ navigation }) {
         }
       />
     ),
-    [navigation],
+    [gridColumns, navigation],
   );
 
   const keyExtractor = useCallback(
@@ -247,14 +252,15 @@ export default function HomeScreen({ navigation }) {
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <FlatList
+        key={`home-grid-${gridColumns}`}
         data={manga}
         keyExtractor={keyExtractor}
-        numColumns={2}
+        numColumns={gridColumns}
         contentContainerStyle={[
           styles.list,
           manga.length === 0 && styles.listFlex,
         ]}
-        columnWrapperStyle={styles.row}
+        columnWrapperStyle={gridColumns > 1 ? styles.row : undefined}
         renderItem={renderItem}
         ListHeaderComponent={renderHeader}
         ListFooterComponent={renderFooter}

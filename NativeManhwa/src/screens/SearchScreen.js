@@ -10,6 +10,7 @@ import {
   Keyboard,
   StyleSheet,
   Platform,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -21,6 +22,7 @@ import {
   CatalogFilters,
   MangaCard,
   EmptyState,
+  getGridColumnCount,
 } from '../components/UIComponents';
 
 const DEFAULT_SOURCE = Platform.OS === 'web' ? 'MangaDex (Bahasa Indonesia)' : ALL_ID_SOURCE;
@@ -32,6 +34,8 @@ const QUICK_SEARCHES = [
 ];
 
 export default function SearchScreen({ navigation }) {
+  const { width } = useWindowDimensions();
+  const gridColumns = getGridColumnCount(width);
   const [query, setQuery] = useState('');
   const [submittedQuery, setSubmittedQuery] = useState('');
   const [manga, setManga] = useState([]);
@@ -201,15 +205,17 @@ export default function SearchScreen({ navigation }) {
         </View>
       ) : (
         <FlatList
+          key={`search-grid-${gridColumns}`}
           data={manga}
           keyExtractor={(item, i) => `${item?.url || 'search-result'}-${i}`}
-          numColumns={2}
+          numColumns={gridColumns}
           contentContainerStyle={[styles.list, manga.length === 0 && styles.listFlex]}
-          columnWrapperStyle={styles.row}
+          columnWrapperStyle={gridColumns > 1 ? styles.row : undefined}
           keyboardShouldPersistTaps="handled"
           renderItem={({ item }) => (
             <MangaCard
               item={item}
+              columns={gridColumns}
               onPress={() =>
                 navigation.navigate('Details', {
                   url: item?.url,
