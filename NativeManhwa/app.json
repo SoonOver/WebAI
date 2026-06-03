@@ -6,13 +6,11 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
-    "jsEngine": "jsc",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.osmium.manhwahub"
     },
     "android": {
-      "jsEngine": "jsc",
       "package": "com.osmium.manhwahub",
       "versionCode": 11,
       "adaptiveIcon": {
