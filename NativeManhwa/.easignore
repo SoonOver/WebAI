@@ -1,0 +1,18 @@
+# Keep EAS builds in managed/prebuild mode.
+android/
+ios/
+
+# Local dependencies and build artifacts.
+node_modules/
+.expo/
+dist/
+web-build/
+
+# Local audit/dev artifacts.
+.expo-dev-server.*
+audit-screenshots/
+test-results/
+task_progress.md
+
+# Local-only environment files.
+.env*.local
