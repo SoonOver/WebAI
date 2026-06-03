@@ -18,6 +18,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { ALL_ID_SOURCE, Scraper, sanitizeCatalogFilters, sourceShortLabel } from '../../scrapers';
 import { THEME } from '../theme';
 import { Storage } from '../storage';
+import { MODULE_FEATURES } from '../modules/manifest';
+import {
+  getModuleContributions,
+  getModuleState,
+  isFeatureEnabled,
+} from '../services/moduleRuntime';
 import {
   ScreenHeader,
   SourceSegment,
@@ -44,9 +50,15 @@ export default function SearchScreen({ navigation }) {
   const [source, setSource] = useState(DEFAULT_SOURCE);
   const [filters, setFilters] = useState(() => sanitizeCatalogFilters(DEFAULT_SOURCE));
   const [safeMode, setSafeMode] = useState(true);
+  const [moduleState, setModuleState] = useState(null);
   const [searching, setSearching] = useState(false);
   const searchIdRef = useRef(0);
-  const showQuickSearch = source === ALL_ID_SOURCE;
+  const quickSearches = useMemo(() => {
+    const modulePicks = getModuleContributions(moduleState, 'quickSearches');
+    return modulePicks.length > 0 ? modulePicks : QUICK_SEARCHES;
+  }, [moduleState]);
+  const quickSearchEnabled = isFeatureEnabled(moduleState, MODULE_FEATURES.allIdQuickSearch);
+  const showQuickSearch = source === ALL_ID_SOURCE && quickSearchEnabled && quickSearches.length > 0;
   const effectiveFilters = useMemo(
     () => ({ ...filters, safeMode }),
     [filters, safeMode],
@@ -74,6 +86,13 @@ export default function SearchScreen({ navigation }) {
         })
         .catch(() => {
           if (active) setSafeMode(true);
+        });
+      getModuleState()
+        .then((state) => {
+          if (active) setModuleState(state);
+        })
+        .catch(() => {
+          if (active) setModuleState(null);
         });
       return () => {
         active = false;
@@ -212,7 +231,7 @@ export default function SearchScreen({ navigation }) {
           <Text style={styles.quickSearchLabel}>Popular on All ID</Text>
           <FlatList
             horizontal
-            data={QUICK_SEARCHES}
+            data={quickSearches}
             keyExtractor={(item) => item}
             showsHorizontalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"

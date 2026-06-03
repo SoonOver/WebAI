@@ -19,6 +19,12 @@ import { THEME } from '../theme';
 import { ScreenHeader } from '../components/UIComponents';
 import { Storage, DownloadManager } from '../storage';
 import {
+  MODULE_FEATURES,
+  OTA_CAPABILITIES,
+  OTA_MODULES,
+  moduleColor,
+} from '../modules/manifest';
+import {
   canUseAppUpdates,
   checkForAppUpdate,
   getAppUpdateInfo,
@@ -30,6 +36,14 @@ import {
   summarizeProviderHealth,
   isProviderHealthStale,
 } from '../services/providerHealth';
+import {
+  getModuleState,
+  isFeatureEnabled,
+  normalizeModuleState,
+  resetModuleState,
+  setModuleEnabled,
+  summarizeModules,
+} from '../services/moduleRuntime';
 
 const APP_VERSION = '1.1.2';
 const CACHE_DIR = FileSystem.cacheDirectory
@@ -90,6 +104,7 @@ export default function SettingsScreen() {
   const [providerHealth, setProviderHealth] = useState([]);
   const [scanningProviderHealth, setScanningProviderHealth] = useState(false);
   const [scanProgress, setScanProgress] = useState(null);
+  const [moduleState, setModuleState] = useState(() => normalizeModuleState(null));
 
   const loadSettings = useCallback(async () => {
     try {
@@ -132,14 +147,20 @@ export default function SettingsScreen() {
     setProviderHealth(health);
   }, []);
 
+  const loadModuleState = useCallback(async () => {
+    const state = await getModuleState();
+    setModuleState(state);
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       loadSettings();
       checkCacheStatus();
       loadHistoryCount();
       loadProviderHealth();
+      loadModuleState();
       setUpdateInfo(getAppUpdateInfo());
-    }, [loadSettings, checkCacheStatus, loadHistoryCount, loadProviderHealth])
+    }, [loadSettings, checkCacheStatus, loadHistoryCount, loadProviderHealth, loadModuleState])
   );
 
   const updateSetting = async (key, value) => {
@@ -255,6 +276,36 @@ export default function SettingsScreen() {
     }
   };
 
+  const handleToggleModule = async (moduleId, enabled) => {
+    try {
+      const nextState = await setModuleEnabled(moduleId, enabled);
+      setModuleState(nextState);
+    } catch {
+      Alert.alert('OTA modules', 'Failed to update this module setting.');
+    }
+  };
+
+  const handleResetModules = () => {
+    Alert.alert(
+      'Reset OTA modules',
+      'This restores the default module toggles. Core safety modules stay enabled.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reset',
+          onPress: async () => {
+            try {
+              const nextState = await resetModuleState();
+              setModuleState(nextState);
+            } catch {
+              Alert.alert('OTA modules', 'Failed to reset module settings.');
+            }
+          },
+        },
+      ],
+    );
+  };
+
   const cacheStatusLabel = () => {
     if (!CACHE_AVAILABLE) return 'Native only';
     if (!cacheInfo.exists) return 'Empty';
@@ -273,6 +324,12 @@ export default function SettingsScreen() {
   const selectedQuality = qualityOption(settings.imageQuality);
   const providerSummary = summarizeProviderHealth(providerHealth);
   const providerHealthStale = isProviderHealthStale(providerHealth);
+  const normalizedModuleState = normalizeModuleState(moduleState);
+  const moduleSummary = summarizeModules(normalizedModuleState);
+  const providerHealthEnabled = isFeatureEnabled(
+    normalizedModuleState,
+    MODULE_FEATURES.providerHealthPanel,
+  );
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
@@ -307,65 +364,145 @@ export default function SettingsScreen() {
             />
           </View>
 
-          <View style={styles.row}>
-            <View style={styles.rowLeft}>
-              <View style={styles.iconWrap}>
-                <Ionicons
-                  name="pulse-outline"
-                  size={20}
-                  color={providerHealthStale ? THEME.warning : THEME.primary}
-                />
+          {providerHealthEnabled ? (
+            <>
+              <View style={styles.row}>
+                <View style={styles.rowLeft}>
+                  <View style={styles.iconWrap}>
+                    <Ionicons
+                      name="pulse-outline"
+                      size={20}
+                      color={providerHealthStale ? THEME.warning : THEME.primary}
+                    />
+                  </View>
+                  <View style={styles.rowText}>
+                    <Text style={styles.rowLabel}>Provider health</Text>
+                    <Text style={styles.rowDescription}>
+                      {providerSummary}{providerHealthStale ? ' · scan recommended' : ''}
+                    </Text>
+                    {scanProgress?.source ? (
+                      <Text style={styles.rowDescription}>
+                        Checking {scanProgress.source} ({scanProgress.index + 1}/{scanProgress.total})
+                      </Text>
+                    ) : null}
+                  </View>
+                </View>
+                <TouchableOpacity
+                  style={[styles.updateBtn, scanningProviderHealth && styles.updateBtnDisabled]}
+                  onPress={handleScanProviders}
+                  disabled={scanningProviderHealth}
+                  activeOpacity={0.7}
+                >
+                  {scanningProviderHealth ? (
+                    <ActivityIndicator size="small" color={THEME.textMuted} />
+                  ) : (
+                    <Text style={styles.updateBtnText}>Scan</Text>
+                  )}
+                </TouchableOpacity>
               </View>
-              <View style={styles.rowText}>
-                <Text style={styles.rowLabel}>Provider health</Text>
-                <Text style={styles.rowDescription}>
-                  {providerSummary}{providerHealthStale ? ' · scan recommended' : ''}
-                </Text>
-                {scanProgress?.source ? (
-                  <Text style={styles.rowDescription}>
-                    Checking {scanProgress.source} ({scanProgress.index + 1}/{scanProgress.total})
-                  </Text>
-                ) : null}
-              </View>
+
+              {providerHealth.length > 0 ? (
+                <View style={styles.providerGrid}>
+                  {providerHealth.map((entry) => (
+                    <View key={entry.source} style={styles.providerHealthRow}>
+                      <View
+                        style={[
+                          styles.providerStatusDot,
+                          entry.status === 'ok' && styles.providerStatusOk,
+                          entry.status === 'degraded' && styles.providerStatusDegraded,
+                          entry.status === 'down' && styles.providerStatusDown,
+                        ]}
+                      />
+                      <View style={styles.providerHealthText}>
+                        <Text style={styles.providerHealthName} numberOfLines={1}>
+                          {entry.label}
+                        </Text>
+                        <Text style={styles.providerHealthMeta} numberOfLines={2}>
+                          {entry.message} · {entry.latencyMs}ms · {formatCheckedAt(entry.checkedAt)}
+                        </Text>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+            </>
+          ) : null}
+        </View>
+
+        {/* ── OTA Modules ── */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeaderRow}>
+            <View>
+              <Text style={styles.sectionTitle}>OTA Modules</Text>
+              <Text style={styles.sectionSubtitle}>{moduleSummary}</Text>
             </View>
             <TouchableOpacity
-              style={[styles.updateBtn, scanningProviderHealth && styles.updateBtnDisabled]}
-              onPress={handleScanProviders}
-              disabled={scanningProviderHealth}
-              activeOpacity={0.7}
+              style={styles.smallActionBtn}
+              onPress={handleResetModules}
+              activeOpacity={0.72}
             >
-              {scanningProviderHealth ? (
-                <ActivityIndicator size="small" color={THEME.textMuted} />
-              ) : (
-                <Text style={styles.updateBtnText}>Scan</Text>
-              )}
+              <Ionicons name="refresh-outline" size={14} color={THEME.text} />
+              <Text style={styles.smallActionText}>Reset</Text>
             </TouchableOpacity>
           </View>
 
-          {providerHealth.length > 0 ? (
-            <View style={styles.providerGrid}>
-              {providerHealth.map((entry) => (
-                <View key={entry.source} style={styles.providerHealthRow}>
-                  <View
-                    style={[
-                      styles.providerStatusDot,
-                      entry.status === 'ok' && styles.providerStatusOk,
-                      entry.status === 'degraded' && styles.providerStatusDegraded,
-                      entry.status === 'down' && styles.providerStatusDown,
-                    ]}
-                  />
-                  <View style={styles.providerHealthText}>
-                    <Text style={styles.providerHealthName} numberOfLines={1}>
-                      {entry.label}
+          <View style={styles.capabilityGrid}>
+            {OTA_CAPABILITIES.map((capability) => (
+              <View key={capability.key} style={styles.capabilityItem}>
+                <Text style={styles.capabilityLabel}>{capability.label}</Text>
+                <Text style={styles.capabilityText} numberOfLines={2}>
+                  {capability.description}
+                </Text>
+              </View>
+            ))}
+          </View>
+
+          <View style={styles.moduleList}>
+            {OTA_MODULES.map((module) => {
+              const enabled = normalizedModuleState.enabled[module.id] !== false;
+              const color = moduleColor(THEME, module);
+              return (
+                <View key={module.id} style={styles.moduleRow}>
+                  <View style={[styles.moduleIcon, { borderColor: color }]}>
+                    <Ionicons name={module.icon} size={18} color={color} />
+                  </View>
+                  <View style={styles.moduleText}>
+                    <View style={styles.moduleTitleRow}>
+                      <Text style={styles.moduleTitle} numberOfLines={1}>
+                        {module.title}
+                      </Text>
+                      <View
+                        style={[
+                          styles.moduleBadge,
+                          enabled ? styles.moduleBadgeActive : styles.moduleBadgeOff,
+                        ]}
+                      >
+                        <Text style={styles.moduleBadgeText}>
+                          {module.locked ? 'Core' : enabled ? 'On' : 'Off'}
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={styles.moduleSummary} numberOfLines={2}>
+                      {module.summary}
                     </Text>
-                    <Text style={styles.providerHealthMeta} numberOfLines={2}>
-                      {entry.message} · {entry.latencyMs}ms · {formatCheckedAt(entry.checkedAt)}
+                    <Text style={styles.moduleMeta} numberOfLines={1}>
+                      {module.category} · {module.surfaces.join(', ')}
                     </Text>
                   </View>
+                  {module.locked ? (
+                    <Ionicons name="lock-closed-outline" size={18} color={THEME.textMuted} />
+                  ) : (
+                    <Switch
+                      value={enabled}
+                      onValueChange={(value) => handleToggleModule(module.id, value)}
+                      trackColor={{ false: THEME.border, true: THEME.primaryDark }}
+                      thumbColor={enabled ? THEME.primary : THEME.textMuted}
+                    />
+                  )}
                 </View>
-              ))}
-            </View>
-          ) : null}
+              );
+            })}
+          </View>
         </View>
 
         {/* ── Reading ── */}
@@ -733,6 +870,35 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     marginBottom: THEME.space.md,
   },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: THEME.space.md,
+    marginBottom: THEME.space.md,
+  },
+  sectionSubtitle: {
+    color: THEME.textMuted,
+    fontSize: 12,
+    lineHeight: 16,
+    marginTop: -THEME.space.sm,
+  },
+  smallActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: THEME.surfaceElevated,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    paddingVertical: THEME.space.sm,
+    paddingHorizontal: THEME.space.md,
+    borderRadius: THEME.radius.sm,
+  },
+  smallActionText: {
+    color: THEME.text,
+    fontSize: 12,
+    fontWeight: '700',
+  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -877,6 +1043,103 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 15,
     marginTop: 2,
+  },
+  capabilityGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: THEME.space.sm,
+    marginBottom: THEME.space.sm,
+  },
+  capabilityItem: {
+    flexGrow: 1,
+    flexBasis: 150,
+    backgroundColor: THEME.surface,
+    borderRadius: THEME.radius.sm,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    padding: THEME.space.md,
+  },
+  capabilityLabel: {
+    color: THEME.text,
+    fontSize: 12,
+    fontWeight: '700',
+    marginBottom: 3,
+  },
+  capabilityText: {
+    color: THEME.textMuted,
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  moduleList: {
+    backgroundColor: THEME.surface,
+    borderRadius: THEME.radius.md,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    overflow: 'hidden',
+  },
+  moduleRow: {
+    minHeight: 78,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: THEME.space.md,
+    paddingHorizontal: THEME.space.md,
+    borderBottomWidth: 1,
+    borderBottomColor: THEME.border,
+  },
+  moduleIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: THEME.radius.sm,
+    borderWidth: 1,
+    backgroundColor: THEME.surfaceElevated,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: THEME.space.md,
+  },
+  moduleText: {
+    flex: 1,
+    marginRight: THEME.space.md,
+  },
+  moduleTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: THEME.space.sm,
+  },
+  moduleTitle: {
+    flex: 1,
+    color: THEME.text,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  moduleBadge: {
+    borderRadius: THEME.radius.pill,
+    paddingVertical: 2,
+    paddingHorizontal: THEME.space.sm,
+  },
+  moduleBadgeActive: {
+    backgroundColor: THEME.primaryDark,
+  },
+  moduleBadgeOff: {
+    backgroundColor: THEME.surfaceElevated,
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
+  moduleBadgeText: {
+    color: THEME.text,
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  moduleSummary: {
+    color: THEME.textSecondary,
+    fontSize: 12,
+    lineHeight: 16,
+    marginTop: 4,
+  },
+  moduleMeta: {
+    color: THEME.textMuted,
+    fontSize: 11,
+    lineHeight: 15,
+    marginTop: 3,
   },
   bottomSpacer: {
     height: THEME.space.xl * 4,

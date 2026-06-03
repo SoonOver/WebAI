@@ -10,6 +10,7 @@
     "postinstall": "node scripts/prepare-hermesc.mjs",
     "prepare:hermesc": "node scripts/prepare-hermesc.mjs",
     "audit:providers": "node scripts/audit-providers.mjs",
+    "audit:modules": "node scripts/audit-ota-modules.mjs",
     "audit:version": "node scripts/audit-version.mjs",
     "audit:live": "playwright test scripts/live-feature-audit.spec.js --workers=1",
     "audit:buttons": "playwright test scripts/live-button-audit.spec.js --workers=1",
@@ -20,8 +21,8 @@
     "install:android:local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android-release.ps1 -Install",
     "install:android:local:fast": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android-release.ps1 -SkipPrebuild -Install",
     "build:ios:preview": "eas build --platform ios --profile preview --non-interactive",
-    "update:preview": "eas update --channel preview",
-    "update:production": "eas update --channel production"
+    "update:preview": "eas update --channel preview --environment preview",
+    "update:production": "eas update --channel production --environment production"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.1.1",

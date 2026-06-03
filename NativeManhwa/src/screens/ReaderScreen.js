@@ -17,6 +17,8 @@ import { Scraper } from '../../scrapers';
 import { THEME } from '../theme';
 import { AutoHeightImage } from '../components/UIComponents';
 import { DownloadManager, Storage } from '../storage';
+import { MODULE_FEATURES } from '../modules/manifest';
+import { getModuleState, isFeatureEnabled } from '../services/moduleRuntime';
 
 export default function ReaderScreen({ route, navigation }) {
   const params = route?.params || {};
@@ -67,6 +69,7 @@ export default function ReaderScreen({ route, navigation }) {
     readerMode: 'webtoon',
     safeMode: true,
   });
+  const [moduleState, setModuleState] = useState(null);
   const settingsRef = useRef(settings);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [changingChapter, setChangingChapter] = useState(false);
@@ -83,6 +86,9 @@ export default function ReaderScreen({ route, navigation }) {
         setMode(s.readerMode === 'manga' ? 'manga' : 'webtoon');
         setSettingsLoaded(true);
       }).catch(() => setSettingsLoaded(true));
+      getModuleState()
+        .then(setModuleState)
+        .catch(() => setModuleState(null));
     }, [])
   );
 
@@ -183,6 +189,7 @@ export default function ReaderScreen({ route, navigation }) {
   const readerProgress = sourceWidthLabel
     ? `${baseReaderProgress} · ${sourceWidthLabel}`
     : baseReaderProgress;
+  const readerToolsEnabled = isFeatureEnabled(moduleState, MODULE_FEATURES.readerFloatingTools);
 
   const toggleReaderMode = useCallback(async () => {
     const nextMode = mode === 'webtoon' ? 'manga' : 'webtoon';
@@ -425,7 +432,7 @@ export default function ReaderScreen({ route, navigation }) {
           )}
         />
       )}
-      {images.length > 0 ? (
+      {images.length > 0 && readerToolsEnabled ? (
         <View style={[styles.readerFloatingBar, { bottom: insets.bottom + THEME.space.md }]}>
           <TouchableOpacity
             onPress={scrollToTop}
