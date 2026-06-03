@@ -55,6 +55,7 @@ export default function ReaderScreen({ route, navigation }) {
   const insets = useSafeAreaInsets();
   const { width: screenWidth } = useWindowDimensions();
   const [images, setImages] = useState([]);
+  const [imageMetrics, setImageMetrics] = useState({});
   const [loading, setLoading] = useState(true);
   const [mode, setMode] = useState('webtoon');
   const [errorMessage, setErrorMessage] = useState('');
@@ -86,6 +87,7 @@ export default function ReaderScreen({ route, navigation }) {
     const currentGen = gen ?? ++loadGenRef.current;
     setLoading(true);
     setErrorMessage('');
+    setImageMetrics({});
     try {
       if (!targetUrl) {
         throw new Error('Missing chapter URL');
@@ -163,9 +165,21 @@ export default function ReaderScreen({ route, navigation }) {
   const canGoPrev = currentIndex > 0 && Boolean(chapters[currentIndex - 1]?.url);
   const canGoNext = currentIndex < chapters.length - 1 && Boolean(chapters[currentIndex + 1]?.url);
   const pageCountLabel = `${images.length} page${images.length === 1 ? '' : 's'}`;
-  const readerProgress = chapters.length > 0
+  const measuredImageWidths = useMemo(
+    () => Object.values(imageMetrics)
+      .map((size) => Number(size?.width))
+      .filter((width) => Number.isFinite(width) && width > 0),
+    [imageMetrics],
+  );
+  const sourceWidthLabel = measuredImageWidths.length > 0
+    ? `${Math.min(...measuredImageWidths)}px source`
+    : '';
+  const baseReaderProgress = chapters.length > 0
     ? `${currentIndex + 1} / ${chapters.length}${images.length > 0 ? ` · ${pageCountLabel}` : ''}`
     : pageCountLabel;
+  const readerProgress = sourceWidthLabel
+    ? `${baseReaderProgress} · ${sourceWidthLabel}`
+    : baseReaderProgress;
 
   const toggleReaderMode = useCallback(async () => {
     const nextMode = mode === 'webtoon' ? 'manga' : 'webtoon';
@@ -191,6 +205,22 @@ export default function ReaderScreen({ route, navigation }) {
       chapter.url,
     ).catch(() => {});
   }, [mangaUrl, mangaTitle, mangaImage, mangaSource, title]);
+
+  const handleImageSize = useCallback((index, size) => {
+    if (!size?.uri || !size.width || !size.height) return;
+    const key = `${index}:${size.uri}`;
+    setImageMetrics((prev) => {
+      const current = prev[key];
+      if (current?.width === size.width && current?.height === size.height) return prev;
+      return {
+        ...prev,
+        [key]: {
+          width: size.width,
+          height: size.height,
+        },
+      };
+    });
+  }, []);
 
   useEffect(() => {
     const currentChapter = chapters[currentIndex] || { url, name: title };
@@ -236,14 +266,25 @@ export default function ReaderScreen({ route, navigation }) {
       <StatusBar style="light" />
       <View style={[styles.readerHeader, { paddingTop: headerPadTop }]}>
         <View style={styles.headerLeft}>
-          <TouchableOpacity onPress={() => navigation.goBack()} hitSlop={12} accessibilityLabel="Back">
+          <TouchableOpacity
+            onPress={() => navigation.goBack()}
+            hitSlop={6}
+            accessibilityLabel="Back"
+            activeOpacity={0.72}
+            style={styles.readerIconButton}
+          >
             <Ionicons name="chevron-back" size={26} color={THEME.text} />
           </TouchableOpacity>
           <TouchableOpacity
             onPress={goPrevChapter}
-            hitSlop={12}
+            hitSlop={6}
             disabled={!canGoPrev || changingChapter}
             accessibilityLabel="Previous chapter"
+            activeOpacity={0.72}
+            style={[
+              styles.readerIconButton,
+              (!canGoPrev || changingChapter) && styles.readerIconButtonDisabled,
+            ]}
           >
             <Ionicons
               name="play-skip-back"
@@ -263,9 +304,14 @@ export default function ReaderScreen({ route, navigation }) {
         <View style={styles.headerRight}>
           <TouchableOpacity
             onPress={goNextChapter}
-            hitSlop={12}
+            hitSlop={6}
             disabled={!canGoNext || changingChapter}
             accessibilityLabel="Next chapter"
+            activeOpacity={0.72}
+            style={[
+              styles.readerIconButton,
+              (!canGoNext || changingChapter) && styles.readerIconButtonDisabled,
+            ]}
           >
             <Ionicons
               name="play-skip-forward"
@@ -275,8 +321,10 @@ export default function ReaderScreen({ route, navigation }) {
           </TouchableOpacity>
           <TouchableOpacity
             onPress={toggleReaderMode}
-            hitSlop={12}
+            hitSlop={6}
             accessibilityLabel={mode === 'webtoon' ? 'Switch to page mode' : 'Switch to scroll mode'}
+            activeOpacity={0.72}
+            style={styles.readerIconButton}
           >
             <Ionicons
               name={mode === 'webtoon' ? 'book-outline' : 'phone-portrait-outline'}
@@ -322,7 +370,7 @@ export default function ReaderScreen({ route, navigation }) {
               ? { paddingTop: headerPadTop + 58, paddingBottom: insets.bottom + THEME.space.lg }
               : undefined
           }
-          renderItem={({ item }) => (
+          renderItem={({ item, index }) => (
             <AutoHeightImage
               source={item}
               referer={url}
@@ -330,6 +378,7 @@ export default function ReaderScreen({ route, navigation }) {
               topInset={mode === 'manga' ? headerPadTop + 58 : 0}
               bottomInset={mode === 'manga' ? insets.bottom + THEME.space.sm : 0}
               qualityMode={settings.imageQuality}
+              onSize={(size) => handleImageSize(index, size)}
             />
           )}
         />
@@ -377,9 +426,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
   },
+  readerIconButton: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: THEME.radius.sm,
+  },
+  readerIconButtonDisabled: {
+    opacity: 0.45,
+  },
   readerTitleWrap: {
     flex: 1,
     marginHorizontal: THEME.space.sm,
+    minWidth: 0,
   },
   readerTitle: {
     color: THEME.text,

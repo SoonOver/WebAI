@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
+import { Alert, AppState } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -16,6 +17,11 @@ import HistoryScreen from '../screens/HistoryScreen';
 import DetailsScreen from '../screens/DetailsScreen';
 import ReaderScreen from '../screens/ReaderScreen';
 import SettingsScreen from '../screens/SettingsScreen';
+import {
+  canUseAppUpdates,
+  checkForAppUpdate,
+  reloadAppUpdate,
+} from '../services/appUpdates';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -74,6 +80,69 @@ const stackScreenOptions = {
   },
 };
 
+const AUTO_UPDATE_COOLDOWN_MS = 30 * 60 * 1000;
+
+function AutoUpdateManager() {
+  const appStateRef = useRef(AppState.currentState);
+  const checkingRef = useRef(false);
+  const promptOpenRef = useRef(false);
+  const lastCheckAtRef = useRef(0);
+
+  const runUpdateCheck = useCallback(async (reason = 'startup') => {
+    if (!canUseAppUpdates() || checkingRef.current || promptOpenRef.current) return;
+
+    const now = Date.now();
+    const isStartup = reason === 'startup';
+    if (!isStartup && now - lastCheckAtRef.current < AUTO_UPDATE_COOLDOWN_MS) return;
+
+    checkingRef.current = true;
+    lastCheckAtRef.current = now;
+    try {
+      const result = await checkForAppUpdate();
+      if (result.status !== 'ready' || promptOpenRef.current) return;
+
+      promptOpenRef.current = true;
+      Alert.alert(
+        'Update ready',
+        'Update baru sudah terunduh. Restart app sekarang?',
+        [
+          {
+            text: 'Later',
+            style: 'cancel',
+            onPress: () => {
+              promptOpenRef.current = false;
+            },
+          },
+          {
+            text: 'Restart',
+            onPress: reloadAppUpdate,
+          },
+        ],
+      );
+    } catch {
+      // OTA update checks are best-effort. A failed check must never block reading.
+    } finally {
+      checkingRef.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    runUpdateCheck('startup');
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      const previousState = appStateRef.current;
+      appStateRef.current = nextState;
+      const returnedToForeground =
+        nextState === 'active' &&
+        (previousState === 'inactive' || previousState === 'background');
+      if (returnedToForeground) runUpdateCheck('resume');
+    });
+
+    return () => subscription.remove();
+  }, [runUpdateCheck]);
+
+  return null;
+}
+
 export default function App() {
   return (
     <ErrorBoundary>
@@ -96,6 +165,7 @@ export default function App() {
               options={{ headerShown: false }}
             />
           </Stack.Navigator>
+          <AutoUpdateManager />
           <StatusBar style="light" />
         </NavigationContainer>
       </SafeAreaProvider>

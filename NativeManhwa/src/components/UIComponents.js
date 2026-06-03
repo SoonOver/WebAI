@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, Image, Pressable, ScrollView, Platform, TouchableOpacity, StyleSheet, useWindowDimensions, PixelRatio } from 'react-native';
+import { View, Text, Image, Pressable, ScrollView, Platform, TouchableOpacity, StyleSheet, useWindowDimensions, PixelRatio, Animated } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Ionicons } from '@expo/vector-icons';
 import { THEME } from '../theme';
@@ -38,6 +38,7 @@ const HIGH_QUALITY_IMAGE_PROPS = Platform.OS === 'android'
   ? { resizeMethod: 'scale', progressiveRenderingEnabled: true, fadeDuration: 0 }
   : {};
 const DEVICE_PIXEL_RATIO = Math.max(1, PixelRatio.get());
+const SHARP_MAX_UPSCALE = 1.35;
 
 function protectedImageHash(value) {
   const text = String(value ?? '');
@@ -144,7 +145,32 @@ function ImageFallback({ height = 300, width }) {
 
 function nativePixelWidth(layoutWidth, naturalWidth, qualityMode) {
   if (qualityMode !== 'sharp' || !naturalWidth || naturalWidth <= 0) return layoutWidth;
-  return Math.max(1, Math.min(layoutWidth, naturalWidth / DEVICE_PIXEL_RATIO));
+  return Math.max(1, Math.min(layoutWidth, (naturalWidth * SHARP_MAX_UPSCALE) / DEVICE_PIXEL_RATIO));
+}
+
+function FadeInImage({ imageKey, style, onLoad, ...props }) {
+  const opacity = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    opacity.setValue(0);
+  }, [imageKey, opacity]);
+
+  const handleLoad = (event) => {
+    Animated.timing(opacity, {
+      toValue: 1,
+      duration: 160,
+      useNativeDriver: true,
+    }).start();
+    if (onLoad) onLoad(event);
+  };
+
+  return (
+    <Animated.Image
+      {...props}
+      style={[style, { opacity }]}
+      onLoad={handleLoad}
+    />
+  );
 }
 
 export function AutoHeightImage({
@@ -154,6 +180,7 @@ export function AutoHeightImage({
   topInset = 0,
   bottomInset = 0,
   qualityMode = 'sharp',
+  onSize,
 }) {
   const { width, height: windowHeight } = useWindowDimensions();
   const sourceUri = typeof source === 'string' ? source : '';
@@ -169,7 +196,11 @@ export function AutoHeightImage({
       return;
     }
     const setMeasuredSize = (w, h) => {
-      setNaturalSize(w > 0 && h > 0 ? { width: w, height: h } : { width: 0, height: 0 });
+      const nextSize = w > 0 && h > 0 ? { width: w, height: h } : { width: 0, height: 0 };
+      setNaturalSize(nextSize);
+      if (nextSize.width > 0 && nextSize.height > 0 && onSize) {
+        onSize({ ...nextSize, uri: imageUri });
+      }
     };
     if (imageUri.startsWith('file://') || imageUri.startsWith('content://')) {
       Image.getSize(imageUri, setMeasuredSize, () => setNaturalSize({ width: 0, height: 0 }));
@@ -184,7 +215,7 @@ export function AutoHeightImage({
     } else {
       Image.getSize(imageUri, setMeasuredSize, () => setNaturalSize({ width: 0, height: 0 }));
     }
-  }, [canUseHeaders, imageUri, referer]);
+  }, [canUseHeaders, imageUri, onSize, referer]);
   const resolvedImageSource = imageSource(imageUri, referer);
   const hasNaturalSize = naturalSize.width > 0 && naturalSize.height > 0;
   const displayWidth = nativePixelWidth(width, naturalSize.width, qualityMode);
@@ -209,7 +240,8 @@ export function AutoHeightImage({
         {!imageUri || failed ? (
           <ImageFallback height={frameHeight} width={width} />
         ) : (
-          <Image
+          <FadeInImage
+            imageKey={imageUri}
             source={resolvedImageSource}
             style={{ width: containWidth, height: containHeight }}
             resizeMode="contain"
@@ -225,7 +257,8 @@ export function AutoHeightImage({
   }
   return (
     <View style={[styles.autoImageFrame, { width }]}>
-      <Image
+      <FadeInImage
+        imageKey={imageUri}
         source={resolvedImageSource}
         style={{ width: displayWidth, height: displayHeight }}
         resizeMode="contain"
@@ -588,7 +621,6 @@ const styles = StyleSheet.create({
     color: THEME.textSecondary,
     fontSize: 11,
     fontWeight: '800',
-    textTransform: 'uppercase',
     marginBottom: THEME.space.xs,
     paddingHorizontal: THEME.space.md,
   },
@@ -740,7 +772,7 @@ const styles = StyleSheet.create({
   imageFallbackText: { color: THEME.textMuted, fontSize: 12, marginTop: 8 },
   containImageFrame: {
     backgroundColor: '#000',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
     alignItems: 'center',
   },
   autoImageFrame: {

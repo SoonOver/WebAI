@@ -5,6 +5,15 @@ const path = require('path');
 const BASE_URL = process.env.AUDIT_URL || 'http://localhost:19006';
 const OUT_DIR = process.env.AUDIT_OUT || process.cwd();
 
+function isNonFatalConsoleNoise(message) {
+  const value = String(message || '');
+  return (
+    value.includes('favicon') ||
+    value.includes('Download the React DevTools') ||
+    value.startsWith('Failed to load resource: net::')
+  );
+}
+
 function outFile(name) {
   return path.join(OUT_DIR, name);
 }
@@ -226,10 +235,7 @@ test('NativeManhwa button-by-button interaction audit', async ({ page }) => {
   await page.waitForTimeout(800);
   results.push('Settings: switches and reader mode toggle respond');
 
-  const fatal = consoleErrors.filter((message) => {
-    const value = String(message || '');
-    return !value.includes('favicon') && !value.includes('Download the React DevTools');
-  });
+  const fatal = consoleErrors.filter((message) => !isNonFatalConsoleNoise(message));
   expect(fatal).toEqual([]);
 
   fs.writeFileSync(

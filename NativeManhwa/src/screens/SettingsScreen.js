@@ -268,8 +268,8 @@ export default function SettingsScreen() {
                 <Text style={styles.rowLabel}>Image quality</Text>
                 <Text style={styles.rowDescription}>
                   {settings.imageQuality === 'sharp'
-                    ? 'Sharp source pixels'
-                    : 'Full screen width'}
+                    ? 'Adaptive anti-blur for low-res panels'
+                    : 'Fill screen width even on low-res panels'}
                 </Text>
               </View>
             </View>
@@ -289,7 +289,7 @@ export default function SettingsScreen() {
                 color={THEME.text}
               />
               <Text style={styles.modeBtnText}>
-                {settings.imageQuality === 'sharp' ? 'Sharp' : 'Full'}
+                {settings.imageQuality === 'sharp' ? 'Adaptive' : 'Full'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -440,7 +440,7 @@ export default function SettingsScreen() {
                 <Text style={styles.rowLabel}>App updates</Text>
                 <Text style={styles.rowDescription}>
                   {updatesAvailable
-                    ? 'Auto-checks on launch via EAS Update'
+                    ? 'Automatic on launch and app resume via EAS Update'
                     : 'Available in installed Android and iOS builds'}
                 </Text>
               </View>

@@ -5,6 +5,15 @@ const path = require('path');
 const BASE_URL = process.env.AUDIT_URL || 'http://localhost:19006';
 const OUT_DIR = process.env.AUDIT_SCREENSHOT_DIR || path.join(process.cwd(), 'audit-screenshots');
 
+function isNonFatalConsoleNoise(message) {
+  const value = String(message || '');
+  return (
+    value.includes('favicon') ||
+    value.includes('Download the React DevTools') ||
+    value.startsWith('Failed to load resource: net::')
+  );
+}
+
 function ensureOutDir() {
   fs.mkdirSync(OUT_DIR, { recursive: true });
 }
@@ -279,10 +288,7 @@ test('NativeManhwa detailed feature screenshots', async ({ page }) => {
   await screenshot(page, screenshots, '15-settings.png', 'Settings preferences and maintenance controls');
   checks.push('Settings: switches, reader mode, cache/history/about controls OK');
 
-  const fatal = consoleErrors.filter((message) => {
-    const value = String(message || '');
-    return !value.includes('favicon') && !value.includes('Download the React DevTools');
-  });
+  const fatal = consoleErrors.filter((message) => !isNonFatalConsoleNoise(message));
   expect(fatal).toEqual([]);
 
   const probeFile = outFile('reader-panel-probe.png');

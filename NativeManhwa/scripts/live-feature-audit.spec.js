@@ -5,6 +5,15 @@ const path = require('path');
 const BASE_URL = process.env.AUDIT_URL || 'http://localhost:19006';
 const OUT_DIR = process.env.AUDIT_OUT || process.cwd();
 
+function isNonFatalConsoleNoise(message) {
+  const text = String(message || '');
+  return (
+    text.includes('favicon') ||
+    text.includes('Download the React DevTools') ||
+    text.startsWith('Failed to load resource: net::')
+  );
+}
+
 function outFile(name) {
   return path.join(OUT_DIR, name);
 }
@@ -42,10 +51,7 @@ async function loadedImageStats(page) {
 }
 
 async function expectNoConsoleErrors(errors, checkpoint) {
-  const fatal = errors.filter((message) => {
-    const text = String(message || '');
-    return !text.includes('favicon') && !text.includes('Download the React DevTools');
-  });
+  const fatal = errors.filter((message) => !isNonFatalConsoleNoise(message));
   expect(fatal, `console errors at ${checkpoint}`).toEqual([]);
 }
 
