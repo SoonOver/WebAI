@@ -96,6 +96,15 @@ export default function SearchScreen({ navigation }) {
         />
       );
     }
+    if (query.trim()) {
+      return (
+        <EmptyState
+          icon="search-outline"
+          title="Ready to search"
+          subtitle="Tap Go to search this source."
+        />
+      );
+    }
     return (
       <EmptyState
         icon="search"
@@ -136,7 +145,11 @@ export default function SearchScreen({ navigation }) {
           activeOpacity={0.8}
           disabled={!query.trim() || searching}
         >
-          <Text style={styles.searchGoText}>Go</Text>
+          {searching ? (
+            <ActivityIndicator size="small" color={THEME.text} />
+          ) : (
+            <Text style={styles.searchGoText}>Go</Text>
+          )}
         </TouchableOpacity>
       </View>
       <SourceSegment value={source} onChange={handleSourceChange} />
@@ -215,6 +228,10 @@ const styles = StyleSheet.create({
     paddingVertical: THEME.space.md,
   },
   searchGo: {
+    minWidth: 64,
+    minHeight: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: THEME.primaryDark,
     paddingVertical: THEME.space.sm,
     paddingHorizontal: THEME.space.lg,

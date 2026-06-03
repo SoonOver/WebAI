@@ -3,7 +3,6 @@ import {
   View,
   Text,
   FlatList,
-  Image,
   TouchableOpacity,
   ActivityIndicator,
   Alert,
@@ -13,7 +12,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { THEME } from '../theme';
-import { ScreenHeader, EmptyState } from '../components/UIComponents';
+import { ScreenHeader, EmptyState, ProtectedImage } from '../components/UIComponents';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Storage } from '../storage';
 
@@ -126,14 +125,9 @@ export default function HistoryScreen({ navigation }) {
         onLongPress={() => deleteEntry(item)}
       >
         {item.image ? (
-          <Image
-            source={{
-              uri: item.image,
-              headers:
-                item.url && String(item.url).startsWith('http')
-                  ? { Referer: item.url }
-                  : undefined,
-            }}
+          <ProtectedImage
+            uri={item.image}
+            referer={item.url}
             style={styles.historyThumb}
           />
         ) : (

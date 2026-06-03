@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, Image, Pressable, ScrollView, Platform, TouchableOpacity, StyleSheet, useWindowDimensions } from 'react-native';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Ionicons } from '@expo/vector-icons';
 import { THEME } from '../theme';
 import {
+  HEADERS,
   SOURCE_PICKER_ORDER,
   WEB_SOURCE_ORDER,
   sourceShortLabel,
@@ -17,6 +19,7 @@ function isBatoCdnImage(uri) {
 
 function imageHeaders(referer, imageUri) {
   const headers = {
+    ...HEADERS,
     Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
   };
   if (isBatoCdnImage(imageUri)) {
@@ -25,6 +28,104 @@ function imageHeaders(referer, imageUri) {
     headers.Referer = referer;
   }
   return headers;
+}
+
+const PROTECTED_IMAGE_CACHE_DIR = FileSystem.cacheDirectory
+  ? `${FileSystem.cacheDirectory}imgcache/protected-images/`
+  : null;
+const protectedImageDownloads = new Map();
+
+function protectedImageHash(value) {
+  const text = String(value ?? '');
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function imageExtension(uri) {
+  const match = String(uri || '').match(/\.(webp|png|jpe?g|gif)(?:[?#].*)?$/i);
+  if (!match) return '.img';
+  const ext = match[1].toLowerCase();
+  return ext === 'jpeg' ? '.jpg' : `.${ext}`;
+}
+
+function canCacheProtectedImage(uri) {
+  return Platform.OS !== 'web' && Boolean(PROTECTED_IMAGE_CACHE_DIR) && isBatoCdnImage(uri);
+}
+
+async function cacheProtectedImage(uri, referer) {
+  if (!canCacheProtectedImage(uri)) return '';
+  const target = `${PROTECTED_IMAGE_CACHE_DIR}${protectedImageHash(uri)}${imageExtension(uri)}`;
+  const cached = await FileSystem.getInfoAsync(target);
+  if (cached.exists && (!Number.isFinite(cached.size) || cached.size > 0)) return target;
+  if (cached.exists) await FileSystem.deleteAsync(target, { idempotent: true });
+  if (protectedImageDownloads.has(uri)) return protectedImageDownloads.get(uri);
+
+  const task = (async () => {
+    await FileSystem.makeDirectoryAsync(PROTECTED_IMAGE_CACHE_DIR, { intermediates: true });
+    const result = await FileSystem.downloadAsync(uri, target, {
+      headers: imageHeaders(referer, uri),
+    });
+    if (result.status >= 200 && result.status < 300) return result.uri;
+    await FileSystem.deleteAsync(target, { idempotent: true });
+    return '';
+  })().finally(() => protectedImageDownloads.delete(uri));
+
+  protectedImageDownloads.set(uri, task);
+  return task;
+}
+
+function useProtectedImageUri(uri, referer) {
+  const [localUri, setLocalUri] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    setLocalUri('');
+    if (!canCacheProtectedImage(uri)) return () => { active = false; };
+
+    cacheProtectedImage(uri, referer)
+      .then((cachedUri) => {
+        if (active && cachedUri) setLocalUri(cachedUri);
+      })
+      .catch(() => {
+        if (active) setLocalUri('');
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [referer, uri]);
+
+  return localUri || uri;
+}
+
+function imageSource(uri, referer) {
+  if (!uri) return null;
+  if (
+    Platform.OS === 'web' ||
+    String(uri).startsWith('file://') ||
+    String(uri).startsWith('content://')
+  ) {
+    return { uri };
+  }
+  return { uri, headers: imageHeaders(referer, uri) };
+}
+
+export function ProtectedImage({ uri, referer, style, resizeMode = 'cover', onError }) {
+  const imageUri = typeof uri === 'string' ? uri : '';
+  const resolvedUri = useProtectedImageUri(imageUri, referer);
+  const source = imageSource(resolvedUri, referer);
+  if (!source) return null;
+  return (
+    <Image
+      source={source}
+      style={style}
+      resizeMode={resizeMode}
+      onError={onError}
+    />
+  );
 }
 
 function ImageFallback({ height = 300, width }) {
@@ -38,7 +139,8 @@ function ImageFallback({ height = 300, width }) {
 
 export function AutoHeightImage({ source, referer, fit = 'width', topInset = 0, bottomInset = 0 }) {
   const { width, height: windowHeight } = useWindowDimensions();
-  const imageUri = typeof source === 'string' ? source : '';
+  const sourceUri = typeof source === 'string' ? source : '';
+  const imageUri = useProtectedImageUri(sourceUri, referer);
   const [height, setHeight] = useState(300);
   const [failed, setFailed] = useState(false);
   const canUseHeaders = Platform.OS !== 'web';
@@ -65,8 +167,7 @@ export function AutoHeightImage({ source, referer, fit = 'width', topInset = 0, 
       Image.getSize(imageUri, setMeasuredHeight, () => setHeight(400));
     }
   }, [canUseHeaders, imageUri, referer, width]);
-  const headers = imageHeaders(referer, imageUri);
-  const imageSource = canUseHeaders ? { uri: imageUri, headers } : { uri: imageUri };
+  const resolvedImageSource = imageSource(imageUri, referer);
   if (fit === 'contain') {
     const frameHeight = Math.max(260, windowHeight - topInset - bottomInset);
     return (
@@ -75,7 +176,7 @@ export function AutoHeightImage({ source, referer, fit = 'width', topInset = 0, 
           <ImageFallback height={frameHeight} width={width} />
         ) : (
           <Image
-            source={imageSource}
+            source={resolvedImageSource}
             style={{ width, height: frameHeight }}
             resizeMode="contain"
             onError={() => setFailed(true)}
@@ -89,7 +190,7 @@ export function AutoHeightImage({ source, referer, fit = 'width', topInset = 0, 
   }
   return (
     <Image
-      source={imageSource}
+      source={resolvedImageSource}
       style={{ width, height }}
       resizeMode="contain"
       onError={() => setFailed(true)}
@@ -286,8 +387,9 @@ export function ScreenHeader({ title, subtitle }) {
 export function MangaCard({ item, onPress }) {
   const { width } = useWindowDimensions();
   const cardWidth = Math.max(140, (width - THEME.space.md * 3) / 2);
-  const imageUri = typeof item?.image === 'string' ? item.image : '';
+  const sourceImageUri = typeof item?.image === 'string' ? item.image : '';
   const itemUrl = typeof item?.url === 'string' ? item.url : '';
+  const imageUri = useProtectedImageUri(sourceImageUri, itemUrl);
   const title = typeof item?.title === 'string' && item.title.trim() ? item.title.trim() : 'Untitled';
   const [imageFailed, setImageFailed] = useState(false);
 
@@ -300,10 +402,7 @@ export function MangaCard({ item, onPress }) {
       <View style={styles.cardImageWrap}>
         {imageUri && !imageFailed ? (
           <Image
-            source={{
-              uri: imageUri,
-              headers: imageHeaders(itemUrl, imageUri),
-            }}
+            source={imageSource(imageUri, itemUrl)}
             style={styles.image}
             onError={() => setImageFailed(true)}
           />

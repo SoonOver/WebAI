@@ -3,7 +3,6 @@ import {
   View,
   Text,
   FlatList,
-  Image,
   TouchableOpacity,
   ActivityIndicator,
   RefreshControl,
@@ -21,6 +20,7 @@ import {
   ScreenHeader,
   MangaCard,
   EmptyState,
+  ProtectedImage,
 } from '../components/UIComponents';
 
 const DOWNLOADS_META_KEY = '@downloads_meta';
@@ -267,8 +267,9 @@ export default function LibraryScreen({ navigation }) {
           }}
         >
           {imageUrl ? (
-            <Image
-              source={{ uri: imageUrl }}
+            <ProtectedImage
+              uri={imageUrl}
+              referer={textOr(meta.mangaUrl)}
               style={styles.downloadThumb}
             />
           ) : (

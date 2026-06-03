@@ -3,7 +3,6 @@ import {
   View,
   Text,
   FlatList,
-  Image,
   TouchableOpacity,
   ActivityIndicator,
   Alert,
@@ -19,7 +18,7 @@ import { Scraper } from '../../scrapers';
 import { THEME } from '../theme';
 import { Storage, DownloadManager, downloadIdsForUrl } from '../storage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { ScreenHeader, EmptyState } from '../components/UIComponents';
+import { ScreenHeader, EmptyState, ProtectedImage } from '../components/UIComponents';
 
 function chapterSortNumber(chapter) {
   const name = String(chapter?.name || '');
@@ -403,11 +402,9 @@ export default function DetailsScreen({ route, navigation }) {
       {/* Hero section with cover image */}
       <View style={styles.detailHero}>
         {displayImage ? (
-          <Image
-            source={{
-              uri: displayImage,
-              headers: url && String(url).startsWith('http') ? { Referer: url } : undefined,
-            }}
+          <ProtectedImage
+            uri={displayImage}
+            referer={url}
             style={styles.detailCover}
             resizeMode="cover"
           />
