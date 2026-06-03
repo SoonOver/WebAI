@@ -24,7 +24,7 @@ import {
   reloadAppUpdate,
 } from '../services/appUpdates';
 
-const APP_VERSION = '1.1.1';
+const APP_VERSION = '1.1.2';
 const CACHE_DIR = FileSystem.cacheDirectory
   ? `${FileSystem.cacheDirectory}imgcache/`
   : null;
@@ -283,8 +283,8 @@ export default function SettingsScreen() {
                 <Text style={styles.rowLabel}>Image quality</Text>
                 <Text style={styles.rowDescription}>
                   {settings.imageQuality === 'sharp'
-                    ? 'Webtoon fills screen width; page mode avoids harsh upscaling'
-                    : 'Fill screen width even on low-res panels'}
+                    ? 'Keeps low-res panels sharper and avoids black side gutters'
+                    : 'Stretches every panel to full screen width'}
                 </Text>
               </View>
             </View>

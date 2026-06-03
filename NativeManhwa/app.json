@@ -2,7 +2,7 @@
   "expo": {
     "name": "WibuNgomik",
     "slug": "NativeManhwa",
-    "version": "1.1.1",
+    "version": "1.1.2",
     "runtimeVersion": {
       "policy": "appVersion"
     },
@@ -21,7 +21,7 @@
     },
     "android": {
       "package": "com.osmium.manhwahub",
-      "versionCode": 12,
+      "versionCode": 13,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#05070A"

@@ -35,10 +35,12 @@ const PROTECTED_IMAGE_CACHE_DIR = FileSystem.cacheDirectory
   : null;
 const protectedImageDownloads = new Map();
 const HIGH_QUALITY_IMAGE_PROPS = Platform.OS === 'android'
-  ? { resizeMethod: 'scale', progressiveRenderingEnabled: true, fadeDuration: 0 }
+  ? { resizeMethod: 'scale', progressiveRenderingEnabled: false, fadeDuration: 0 }
   : {};
 const DEVICE_PIXEL_RATIO = Math.max(1, PixelRatio.get());
 const SHARP_MAX_UPSCALE = 1.35;
+const IMAGE_DIMENSION_RANGE = 'bytes=0-65535';
+const LOCAL_IMAGE_PROBE_LENGTH = 65536;
 
 function protectedImageHash(value) {
   const text = String(value ?? '');
@@ -118,6 +120,130 @@ function imageSource(uri, referer) {
   return { uri, headers: imageHeaders(referer, uri) };
 }
 
+function ascii(bytes, start, end) {
+  let text = '';
+  for (let i = start; i < end && i < bytes.length; i += 1) {
+    text += String.fromCharCode(bytes[i]);
+  }
+  return text;
+}
+
+function parseJpegSize(bytes) {
+  if (bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+  let offset = 2;
+  while (offset + 8 < bytes.length) {
+    if (bytes[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+    const marker = bytes[offset + 1];
+    const length = (bytes[offset + 2] << 8) + bytes[offset + 3];
+    const isStartOfFrame =
+      (marker >= 0xc0 && marker <= 0xc3) ||
+      (marker >= 0xc5 && marker <= 0xc7) ||
+      (marker >= 0xc9 && marker <= 0xcb) ||
+      (marker >= 0xcd && marker <= 0xcf);
+    if (isStartOfFrame) {
+      return {
+        width: (bytes[offset + 7] << 8) + bytes[offset + 8],
+        height: (bytes[offset + 5] << 8) + bytes[offset + 6],
+      };
+    }
+    if (!length || length < 2) break;
+    offset += 2 + length;
+  }
+  return null;
+}
+
+function parsePngSize(bytes) {
+  if (
+    bytes[0] !== 0x89 ||
+    bytes[1] !== 0x50 ||
+    bytes[2] !== 0x4e ||
+    bytes[3] !== 0x47 ||
+    bytes.length < 24
+  ) {
+    return null;
+  }
+  return {
+    width: (bytes[16] << 24) + (bytes[17] << 16) + (bytes[18] << 8) + bytes[19],
+    height: (bytes[20] << 24) + (bytes[21] << 16) + (bytes[22] << 8) + bytes[23],
+  };
+}
+
+function parseWebpSize(bytes) {
+  if (ascii(bytes, 0, 4) !== 'RIFF' || ascii(bytes, 8, 12) !== 'WEBP') return null;
+  const type = ascii(bytes, 12, 16);
+  if (type === 'VP8X' && bytes.length >= 30) {
+    return {
+      width: 1 + bytes[24] + (bytes[25] << 8) + (bytes[26] << 16),
+      height: 1 + bytes[27] + (bytes[28] << 8) + (bytes[29] << 16),
+    };
+  }
+  if (type === 'VP8 ' && bytes.length >= 30) {
+    const start = 20;
+    if (bytes[start + 3] === 0x9d && bytes[start + 4] === 0x01 && bytes[start + 5] === 0x2a) {
+      return {
+        width: (bytes[start + 6] | (bytes[start + 7] << 8)) & 0x3fff,
+        height: (bytes[start + 8] | (bytes[start + 9] << 8)) & 0x3fff,
+      };
+    }
+  }
+  if (type === 'VP8L' && bytes.length >= 25) {
+    const b0 = bytes[21];
+    const b1 = bytes[22];
+    const b2 = bytes[23];
+    const b3 = bytes[24];
+    return {
+      width: 1 + (((b1 & 0x3f) << 8) | b0),
+      height: 1 + (((b3 & 0x0f) << 10) | (b2 << 2) | ((b1 & 0xc0) >> 6)),
+    };
+  }
+  return null;
+}
+
+function parseImagePixelSize(bytes) {
+  const size = parseJpegSize(bytes) || parsePngSize(bytes) || parseWebpSize(bytes);
+  if (!size || size.width <= 0 || size.height <= 0) return null;
+  return size;
+}
+
+function base64ToBytes(base64) {
+  if (typeof atob !== 'function') return null;
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+async function probeLocalImagePixelSize(uri) {
+  const base64 = await FileSystem.readAsStringAsync(uri, {
+    encoding: FileSystem.EncodingType.Base64,
+    position: 0,
+    length: LOCAL_IMAGE_PROBE_LENGTH,
+  });
+  const bytes = base64ToBytes(base64);
+  return bytes ? parseImagePixelSize(bytes) : null;
+}
+
+async function probeImagePixelSize(uri, referer) {
+  if (!uri || Platform.OS === 'web') return null;
+  if (String(uri).startsWith('file://') || String(uri).startsWith('content://')) {
+    return probeLocalImagePixelSize(uri);
+  }
+  const source = imageSource(uri, referer);
+  if (!source) return null;
+  const headers = {
+    ...(source.headers || {}),
+    Range: IMAGE_DIMENSION_RANGE,
+  };
+  const response = await fetch(source.uri, { headers });
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  return parseImagePixelSize(bytes);
+}
+
 export function ProtectedImage({ uri, referer, style, resizeMode = 'cover', onError }) {
   const imageUri = typeof uri === 'string' ? uri : '';
   const resolvedUri = useProtectedImageUri(imageUri, referer);
@@ -146,6 +272,10 @@ function ImageFallback({ height = 300, width }) {
 function nativePixelWidth(layoutWidth, naturalWidth, qualityMode) {
   if (qualityMode !== 'sharp' || !naturalWidth || naturalWidth <= 0) return layoutWidth;
   return Math.max(1, Math.min(layoutWidth, (naturalWidth * SHARP_MAX_UPSCALE) / DEVICE_PIXEL_RATIO));
+}
+
+function isLikelyScaledImageSize(size) {
+  return Platform.OS === 'android' && size?.width > 0 && size.width < 480;
 }
 
 function FadeInImage({ imageKey, style, onLoad, ...props }) {
@@ -186,48 +316,92 @@ export function AutoHeightImage({
   const sourceUri = typeof source === 'string' ? source : '';
   const imageUri = useProtectedImageUri(sourceUri, referer);
   const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
+  const [pixelSize, setPixelSize] = useState({ width: 0, height: 0 });
   const [failed, setFailed] = useState(false);
   const canUseHeaders = Platform.OS !== 'web';
   useEffect(() => {
+    let active = true;
     setFailed(false);
     setNaturalSize({ width: 0, height: 0 });
+    setPixelSize({ width: 0, height: 0 });
     if (!imageUri) {
       setFailed(true);
-      return;
+      return () => {
+        active = false;
+      };
     }
-    const setMeasuredSize = (w, h) => {
-      const nextSize = w > 0 && h > 0 ? { width: w, height: h } : { width: 0, height: 0 };
+    let pixelProbeStarted = false;
+    const publishNaturalSize = (nextSize) => {
       setNaturalSize(nextSize);
       if (nextSize.width > 0 && nextSize.height > 0 && onSize) {
         onSize({ ...nextSize, uri: imageUri });
       }
     };
+    const probeUri = sourceUri && !sourceUri.startsWith('file://') && !sourceUri.startsWith('content://')
+      ? sourceUri
+      : imageUri;
+    const startPixelProbe = (fallbackSize = null) => {
+      if (pixelProbeStarted) return;
+      pixelProbeStarted = true;
+      probeImagePixelSize(probeUri, referer)
+        .then((size) => (
+          size || (imageUri !== probeUri ? probeImagePixelSize(imageUri, referer) : null)
+        ))
+        .then((size) => {
+          if (!active) return;
+          if (size) {
+            setPixelSize(size);
+            if (onSize) onSize({ ...size, uri: imageUri });
+            return;
+          }
+          if (fallbackSize) publishNaturalSize(fallbackSize);
+        })
+        .catch(() => {
+          if (active && fallbackSize) publishNaturalSize(fallbackSize);
+        });
+    };
+    const setMeasuredSize = (w, h) => {
+      if (!active) return;
+      const nextSize = w > 0 && h > 0 ? { width: w, height: h } : { width: 0, height: 0 };
+      if (isLikelyScaledImageSize(nextSize)) {
+        startPixelProbe(nextSize);
+        return;
+      }
+      publishNaturalSize(nextSize);
+    };
+    const clearMeasuredSize = () => {
+      if (!active) return;
+      setNaturalSize({ width: 0, height: 0 });
+      startPixelProbe();
+    };
     if (imageUri.startsWith('file://') || imageUri.startsWith('content://')) {
-      Image.getSize(imageUri, setMeasuredSize, () => setNaturalSize({ width: 0, height: 0 }));
+      Image.getSize(imageUri, setMeasuredSize, clearMeasuredSize);
     } else if (canUseHeaders && typeof Image.getSizeWithHeaders === 'function') {
       const headers = imageHeaders(referer, imageUri);
       Image.getSizeWithHeaders(
         imageUri,
         headers || {},
         setMeasuredSize,
-        () => setNaturalSize({ width: 0, height: 0 })
+        clearMeasuredSize
       );
     } else {
-      Image.getSize(imageUri, setMeasuredSize, () => setNaturalSize({ width: 0, height: 0 }));
+      Image.getSize(imageUri, setMeasuredSize, clearMeasuredSize);
     }
-  }, [canUseHeaders, imageUri, onSize, referer]);
+    return () => {
+      active = false;
+    };
+  }, [canUseHeaders, imageUri, onSize, referer, sourceUri]);
   const resolvedImageSource = imageSource(imageUri, referer);
-  const hasNaturalSize = naturalSize.width > 0 && naturalSize.height > 0;
-  const displayWidth = fit === 'width'
-    ? width
-    : nativePixelWidth(width, naturalSize.width, qualityMode);
+  const measuredSize = pixelSize.width > 0 && pixelSize.height > 0 ? pixelSize : naturalSize;
+  const hasNaturalSize = measuredSize.width > 0 && measuredSize.height > 0;
+  const displayWidth = nativePixelWidth(width, measuredSize.width, qualityMode);
   const displayHeight = hasNaturalSize
-    ? naturalSize.height * (displayWidth / naturalSize.width)
+    ? measuredSize.height * (displayWidth / measuredSize.width)
     : 400;
   if (fit === 'contain') {
     const frameHeight = Math.max(260, windowHeight - topInset - bottomInset);
-    const naturalWidthDp = hasNaturalSize ? naturalSize.width / DEVICE_PIXEL_RATIO : 0;
-    const naturalHeightDp = hasNaturalSize ? naturalSize.height / DEVICE_PIXEL_RATIO : 0;
+    const naturalWidthDp = hasNaturalSize ? measuredSize.width / DEVICE_PIXEL_RATIO : 0;
+    const naturalHeightDp = hasNaturalSize ? measuredSize.height / DEVICE_PIXEL_RATIO : 0;
     const sharpScale = hasNaturalSize
       ? Math.min(1, width / naturalWidthDp, frameHeight / naturalHeightDp)
       : 1;
@@ -773,12 +947,12 @@ const styles = StyleSheet.create({
   imageFallback: { backgroundColor: THEME.surface, alignItems: 'center', justifyContent: 'center' },
   imageFallbackText: { color: THEME.textMuted, fontSize: 12, marginTop: 8 },
   containImageFrame: {
-    backgroundColor: '#000',
+    backgroundColor: '#05070A',
     justifyContent: 'flex-start',
     alignItems: 'center',
   },
   autoImageFrame: {
-    backgroundColor: '#000',
+    backgroundColor: '#05070A',
     alignItems: 'center',
   },
   sourceBadge: {

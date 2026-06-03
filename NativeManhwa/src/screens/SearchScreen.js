@@ -26,7 +26,6 @@ import {
 const DEFAULT_SOURCE = Platform.OS === 'web' ? 'MangaDex (Bahasa Indonesia)' : ALL_ID_SOURCE;
 const QUICK_SEARCHES = [
   'The Greatest Estate Developer',
-  'I Will Teach You Self Defense',
   'Eleceed',
   'Solo Leveling',
   'Lookism',

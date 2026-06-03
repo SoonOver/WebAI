@@ -61,6 +61,13 @@ function isBatoCdnImage(url) {
   return /merrypsycho\.xyz/i.test(String(url || ''));
 }
 
+function imageFileExtension(url) {
+  const match = String(url || '').match(/\.(webp|png|jpe?g|gif)(?:[?#].*)?$/i);
+  if (!match) return '.img';
+  const ext = match[1].toLowerCase();
+  return ext === 'jpeg' ? '.jpg' : `.${ext}`;
+}
+
 function imageDownloadHeaders(imageUrl, referer) {
   const headers = {
     ...HEADERS,
@@ -248,7 +255,7 @@ export const DownloadManager = {
     await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
     try {
       for (let i = 0; i < images.length; i++) {
-        const fileUri = `${dir}${String(i).padStart(3, '0')}.jpg`;
+        const fileUri = `${dir}${String(i).padStart(3, '0')}${imageFileExtension(images[i])}`;
         await FileSystem.downloadAsync(images[i], fileUri, {
           headers: imageDownloadHeaders(images[i], chapterUrl),
         });
@@ -275,7 +282,7 @@ export const DownloadManager = {
     if (Platform.OS === 'web') return imageUrl;
     if (!CACHE_DIR) return imageUrl;
     const id = safeEncode(imageUrl).substring(0, 32);
-    const path = `${CACHE_DIR}${id}.jpg`;
+    const path = `${CACHE_DIR}${id}${imageFileExtension(imageUrl)}`;
     try {
       const info = await FileSystem.getInfoAsync(path);
       if (info.exists && info.size > 0) return path;
