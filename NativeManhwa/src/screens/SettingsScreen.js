@@ -87,6 +87,26 @@ function formatCheckedAt(value) {
   return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
 
+function providerPanelQuality(entry) {
+  if (!entry?.checkedAt) return null;
+  if (entry.panelQuality === 'ok') return { label: 'Good', style: styles.providerQualityOk };
+  if (entry.panelQuality === 'soft') return { label: 'Soft', style: styles.providerQualitySoft };
+  if (entry.panelQuality === 'poor') return { label: 'Low', style: styles.providerQualityPoor };
+  return { label: 'Unknown', style: styles.providerQualityUnknown };
+}
+
+function providerHealthMetaText(entry) {
+  const chunks = [entry.message];
+  if (entry.panelWidth > 0) {
+    chunks.push(`${entry.panelWidth}px panel`);
+  } else if (entry.panelCount > 0) {
+    chunks.push(`${entry.panelCount} panels`);
+  }
+  chunks.push(`${entry.latencyMs}ms`);
+  chunks.push(formatCheckedAt(entry.checkedAt));
+  return chunks.filter(Boolean).join(' · ');
+}
+
 export default function SettingsScreen() {
   const [settings, setSettings] = useState({
     autoAdvance: false,
@@ -404,26 +424,38 @@ export default function SettingsScreen() {
 
               {providerHealth.length > 0 ? (
                 <View style={styles.providerGrid}>
-                  {providerHealth.map((entry) => (
-                    <View key={entry.source} style={styles.providerHealthRow}>
-                      <View
-                        style={[
-                          styles.providerStatusDot,
-                          entry.status === 'ok' && styles.providerStatusOk,
-                          entry.status === 'degraded' && styles.providerStatusDegraded,
-                          entry.status === 'down' && styles.providerStatusDown,
-                        ]}
-                      />
-                      <View style={styles.providerHealthText}>
-                        <Text style={styles.providerHealthName} numberOfLines={1}>
-                          {entry.label}
-                        </Text>
-                        <Text style={styles.providerHealthMeta} numberOfLines={2}>
-                          {entry.message} · {entry.latencyMs}ms · {formatCheckedAt(entry.checkedAt)}
-                        </Text>
+                  {providerHealth.map((entry) => {
+                    const panelQuality = providerPanelQuality(entry);
+                    return (
+                      <View key={entry.source} style={styles.providerHealthRow}>
+                        <View
+                          style={[
+                            styles.providerStatusDot,
+                            entry.status === 'ok' && styles.providerStatusOk,
+                            entry.status === 'degraded' && styles.providerStatusDegraded,
+                            entry.status === 'down' && styles.providerStatusDown,
+                          ]}
+                        />
+                        <View style={styles.providerHealthText}>
+                          <View style={styles.providerHealthTitleRow}>
+                            <Text style={styles.providerHealthName} numberOfLines={1}>
+                              {entry.label}
+                            </Text>
+                            {panelQuality ? (
+                              <View style={[styles.providerQualityBadge, panelQuality.style]}>
+                                <Text style={styles.providerQualityText}>
+                                  {panelQuality.label}
+                                </Text>
+                              </View>
+                            ) : null}
+                          </View>
+                          <Text style={styles.providerHealthMeta} numberOfLines={2}>
+                            {providerHealthMetaText(entry)}
+                          </Text>
+                        </View>
                       </View>
-                    </View>
-                  ))}
+                    );
+                  })}
                 </View>
               ) : null}
             </>
@@ -1037,10 +1069,43 @@ const styles = StyleSheet.create({
   providerHealthText: {
     flex: 1,
   },
+  providerHealthTitleRow: {
+    minHeight: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: THEME.space.sm,
+  },
   providerHealthName: {
+    flex: 1,
     color: THEME.text,
     fontSize: 13,
     fontWeight: '700',
+  },
+  providerQualityBadge: {
+    minWidth: 54,
+    borderRadius: THEME.radius.pill,
+    paddingVertical: 2,
+    paddingHorizontal: THEME.space.sm,
+    alignItems: 'center',
+  },
+  providerQualityOk: {
+    backgroundColor: 'rgba(22,163,74,0.2)',
+  },
+  providerQualitySoft: {
+    backgroundColor: 'rgba(245,158,11,0.22)',
+  },
+  providerQualityPoor: {
+    backgroundColor: 'rgba(239,68,68,0.24)',
+  },
+  providerQualityUnknown: {
+    backgroundColor: THEME.surfaceElevated,
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
+  providerQualityText: {
+    color: THEME.text,
+    fontSize: 10,
+    fontWeight: '800',
   },
   providerHealthMeta: {
     color: THEME.textMuted,

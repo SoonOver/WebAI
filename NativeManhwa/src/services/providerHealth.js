@@ -1,13 +1,20 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Scraper, SOURCE_ORDER, sourceShortLabel, sortChaptersByNumber } from '../../scrapers';
+import { HEADERS, Scraper, SOURCE_ORDER, sourceShortLabel, sortChaptersByNumber } from '../../scrapers';
+import { probePanelQuality, scorePanelQuality } from './panelQuality';
 
 const PROVIDER_HEALTH_KEY = '@provider_health';
 const HEALTH_STALE_MS = 6 * 60 * 60 * 1000;
+const HEALTH_CANDIDATE_LIMIT = 6;
 
 function shortError(error) {
   return String(error?.message || error || 'Unknown error')
     .replace(/\s+/g, ' ')
     .slice(0, 180);
+}
+
+function shortTitle(title) {
+  const text = String(title || '').replace(/\s+/g, ' ').trim();
+  return text.length > 42 ? `${text.slice(0, 39)}...` : text;
 }
 
 function statusRank(status) {
@@ -18,6 +25,8 @@ function statusRank(status) {
 
 function normalizeHealthEntry(source, value = {}) {
   const checkedAt = Number(value.checkedAt);
+  const panelWidth = Number(value.panelWidth);
+  const panelHeight = Number(value.panelHeight);
   return {
     source,
     label: sourceShortLabel(source),
@@ -27,6 +36,11 @@ function normalizeHealthEntry(source, value = {}) {
     catalogCount: Number.isFinite(Number(value.catalogCount)) ? Number(value.catalogCount) : 0,
     chapterCount: Number.isFinite(Number(value.chapterCount)) ? Number(value.chapterCount) : 0,
     panelCount: Number.isFinite(Number(value.panelCount)) ? Number(value.panelCount) : 0,
+    panelWidth: Number.isFinite(panelWidth) ? panelWidth : 0,
+    panelHeight: Number.isFinite(panelHeight) ? panelHeight : 0,
+    panelQuality: ['ok', 'soft', 'poor', 'unknown'].includes(value.panelQuality)
+      ? value.panelQuality
+      : 'unknown',
     checkedAt: Number.isFinite(checkedAt) ? checkedAt : 0,
   };
 }
@@ -57,7 +71,7 @@ export function summarizeProviderHealth(entries = []) {
   const ok = checked.filter((entry) => entry.status === 'ok').length;
   const degraded = checked.filter((entry) => entry.status === 'degraded').length;
   const down = checked.filter((entry) => entry.status === 'down').length;
-  return `${ok} ok · ${degraded} slow · ${down} down`;
+  return `${ok} ok · ${degraded} needs attention · ${down} down`;
 }
 
 export function isProviderHealthStale(entries = []) {
@@ -82,47 +96,90 @@ async function scanOneProvider(source) {
       };
     }
 
-    const candidate = catalog[0];
-    const details = await Scraper.fetchDetails(candidate.source || source, candidate.url);
-    const chapters = Array.isArray(details?.chapters)
-      ? details.chapters.filter((chapter) => chapter?.url)
-      : [];
-    const orderedChapters = sortChaptersByNumber(chapters, 'desc');
-    if (chapters.length === 0) {
-      return {
-        source,
-        status: 'degraded',
-        message: 'Catalog loads, but no readable chapters found',
-        latencyMs: Date.now() - start,
-        catalogCount: catalog.length,
-        checkedAt: Date.now(),
-      };
+    const skippedCandidates = [];
+    const candidates = catalog.slice(0, HEALTH_CANDIDATE_LIMIT);
+    for (const candidate of candidates) {
+      try {
+        const itemSource = candidate.source || source;
+        const details = await Scraper.fetchDetails(itemSource, candidate.url);
+        const chapters = Array.isArray(details?.chapters)
+          ? details.chapters.filter((chapter) => chapter?.url)
+          : [];
+        const orderedChapters = sortChaptersByNumber(chapters, 'desc');
+        if (chapters.length === 0) {
+          skippedCandidates.push(`${shortTitle(candidate.title)}: no chapters`);
+          continue;
+        }
+
+        const latestChapter = orderedChapters[0] || chapters[0];
+        const images = await Scraper.fetchImages(itemSource, latestChapter.url);
+        const panelCount = Array.isArray(images) ? images.filter(Boolean).length : 0;
+        if (panelCount === 0) {
+          skippedCandidates.push(`${shortTitle(candidate.title)}: empty panels`);
+          continue;
+        }
+
+        const hasCover = Boolean(details?.image || candidate.image);
+        const firstPanel = images.find(Boolean);
+        let panelProbe = null;
+        try {
+          panelProbe = await probePanelQuality(firstPanel, latestChapter.url, HEADERS);
+        } catch (error) {
+          panelProbe = {
+            dimensions: null,
+            quality: {
+              ...scorePanelQuality(null),
+              message: shortError(error),
+            },
+          };
+        }
+
+        const panelQuality = panelProbe?.quality || scorePanelQuality(panelProbe?.dimensions);
+        const qualityNeedsAttention = ['poor', 'soft', 'unknown'].includes(panelQuality.status);
+        const status = hasCover && !qualityNeedsAttention ? 'ok' : 'degraded';
+        const messageParts = [];
+        if (hasCover) {
+          messageParts.push('Readable');
+        } else {
+          messageParts.push('Readable, cover fallback needed');
+        }
+        if (skippedCandidates.length > 0) {
+          messageParts.push(`Skipped ${skippedCandidates.length} stale catalog item${skippedCandidates.length === 1 ? '' : 's'}`);
+        }
+        if (panelQuality.status === 'ok') {
+          messageParts.push(panelQuality.message);
+        } else if (panelQuality.status === 'unknown') {
+          messageParts.push(`Panel probe unknown: ${panelQuality.message}`);
+        } else {
+          messageParts.push(`${panelQuality.label} panels: ${panelQuality.message}`);
+        }
+
+        return {
+          source,
+          status,
+          message: messageParts.join(' · '),
+          latencyMs: Date.now() - start,
+          catalogCount: catalog.length,
+          chapterCount: chapters.length,
+          panelCount,
+          panelWidth: panelQuality.width,
+          panelHeight: panelQuality.height,
+          panelQuality: panelQuality.status,
+          checkedAt: Date.now(),
+        };
+      } catch (error) {
+        skippedCandidates.push(`${shortTitle(candidate.title)}: ${shortError(error)}`);
+      }
     }
 
-    const latestChapter = orderedChapters[0] || chapters[0];
-    const images = await Scraper.fetchImages(candidate.source || source, latestChapter.url);
-    const panelCount = Array.isArray(images) ? images.filter(Boolean).length : 0;
-    if (panelCount === 0) {
-      return {
-        source,
-        status: 'degraded',
-        message: 'Details load, but chapter panels are empty',
-        latencyMs: Date.now() - start,
-        catalogCount: catalog.length,
-        chapterCount: chapters.length,
-        checkedAt: Date.now(),
-      };
-    }
-
-    const hasCover = Boolean(details?.image || candidate.image);
     return {
       source,
-      status: hasCover ? 'ok' : 'degraded',
-      message: hasCover ? 'Catalog, details, chapters, and panels load' : 'Readable, but cover fallback may be needed',
+      status: 'degraded',
+      message: skippedCandidates.length > 0
+        ? `Catalog loads, but sampled titles were not readable · ${skippedCandidates[0]}`
+        : 'Catalog loads, but no readable chapters found',
       latencyMs: Date.now() - start,
       catalogCount: catalog.length,
-      chapterCount: chapters.length,
-      panelCount,
       checkedAt: Date.now(),
     };
   } catch (error) {

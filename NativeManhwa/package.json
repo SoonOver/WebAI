@@ -10,6 +10,7 @@
     "postinstall": "node scripts/prepare-hermesc.mjs",
     "prepare:hermesc": "node scripts/prepare-hermesc.mjs",
     "audit:providers": "node scripts/audit-providers.mjs",
+    "audit:panel-quality": "node scripts/audit-panel-quality.mjs",
     "audit:modules": "node scripts/audit-ota-modules.mjs",
     "audit:version": "node scripts/audit-version.mjs",
     "audit:live": "playwright test scripts/live-feature-audit.spec.js --workers=1",
