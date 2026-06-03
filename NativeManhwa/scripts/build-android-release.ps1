@@ -2,6 +2,7 @@ param(
   [switch]$SkipPrebuild,
   [switch]$Install,
   [switch]$LocalTester,
+  [string]$UpdateChannel = "preview",
   [string]$SdkDir = "E:\Android\android-sdk",
   [string]$GradleHome = "E:\Android\gradle-home",
   [string]$JavaHome = "C:\Program Files\Java\jdk-17",
@@ -101,7 +102,10 @@ function Ensure-LocalSigningCredentials {
 }
 
 function Ensure-AndroidLocalSigningPatch {
-  param([string]$AndroidDir)
+  param(
+    [string]$AndroidDir,
+    [string]$UpdateChannel
+  )
 
   $appGradle = Join-Path $AndroidDir "app\build.gradle"
   $manifest = Join-Path $AndroidDir "app\src\main\AndroidManifest.xml"
@@ -161,8 +165,35 @@ def hasReleaseKeystore = keystoreProperties['storeFile'] && keystoreProperties['
 
   if (Test-Path -LiteralPath $manifest) {
     $manifestText = Get-Content -LiteralPath $manifest -Raw
+    $manifestChanged = $false
     if ($manifestText -match 'android:label="@string/app_name"') {
       $manifestText = $manifestText -replace 'android:label="@string/app_name"', 'android:label="${appLabel}"'
+      $manifestChanged = $true
+    }
+
+    $requestHeadersValue = "{&quot;expo-channel-name&quot;:&quot;$UpdateChannel&quot;}"
+    $requestHeadersMeta = "    <meta-data android:name=`"expo.modules.updates.UPDATES_CONFIGURATION_REQUEST_HEADERS_KEY`" android:value=`"$requestHeadersValue`"/>"
+    $requestHeadersPattern = '(<meta-data android:name="expo\.modules\.updates\.UPDATES_CONFIGURATION_REQUEST_HEADERS_KEY" android:value=")[^"]*("/>)'
+
+    if ($manifestText -match $requestHeadersPattern) {
+      $updatedManifestText = [regex]::Replace($manifestText, $requestHeadersPattern, "`$1$requestHeadersValue`$2")
+      if ($updatedManifestText -ne $manifestText) {
+        $manifestText = $updatedManifestText
+        $manifestChanged = $true
+      }
+    } else {
+      $updateUrlPattern = '(?m)^(\s*)<meta-data android:name="expo\.modules\.updates\.EXPO_UPDATE_URL" android:value="[^"]*"/>\s*$'
+      $updateUrlLine = [regex]::Match($manifestText, $updateUrlPattern)
+      if (-not $updateUrlLine.Success) {
+        throw "Expo update URL metadata not found in AndroidManifest.xml; cannot attach local OTA channel."
+      }
+
+      $insertAt = $updateUrlLine.Index + $updateUrlLine.Length
+      $manifestText = $manifestText.Substring(0, $insertAt) + "`n$requestHeadersMeta" + $manifestText.Substring($insertAt)
+      $manifestChanged = $true
+    }
+
+    if ($manifestChanged) {
       Write-Utf8NoBom -Path $manifest -Value $manifestText
     }
   }
@@ -173,6 +204,9 @@ if (-not (Test-Path -LiteralPath $SdkDir)) {
 }
 if (-not (Test-Path -LiteralPath (Join-Path $JavaHome "bin\java.exe"))) {
   throw "Java 17 not found: $JavaHome"
+}
+if ($UpdateChannel -notmatch '^[a-zA-Z0-9._-]+$') {
+  throw "Invalid update channel '$UpdateChannel'. Use only letters, numbers, dot, underscore, or dash."
 }
 
 New-Item -ItemType Directory -Force -Path $GradleHome, $TempDir | Out-Null
@@ -202,7 +236,7 @@ if (-not (Test-Path -LiteralPath $androidDir)) {
 }
 
 Ensure-LocalSigningCredentials -AndroidDir $androidDir -ProjectRoot $projectRoot -JavaHome $JavaHome
-Ensure-AndroidLocalSigningPatch -AndroidDir $androidDir
+Ensure-AndroidLocalSigningPatch -AndroidDir $androidDir -UpdateChannel $UpdateChannel
 
 $localProperties = Join-Path $androidDir "local.properties"
 $sdkDirForGradle = $SdkDir.Replace("\", "/")
