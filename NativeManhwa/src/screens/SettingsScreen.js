@@ -357,6 +357,7 @@ export default function SettingsScreen() {
               </View>
             </View>
             <Switch
+              accessibilityLabel="Toggle safe mode"
               value={settings.safeMode}
               onValueChange={(v) => updateSetting('safeMode', v)}
               trackColor={{ false: THEME.border, true: THEME.primaryDark }}
@@ -493,6 +494,7 @@ export default function SettingsScreen() {
                     <Ionicons name="lock-closed-outline" size={18} color={THEME.textMuted} />
                   ) : (
                     <Switch
+                      accessibilityLabel={`Toggle ${module.title} module`}
                       value={enabled}
                       onValueChange={(value) => handleToggleModule(module.id, value)}
                       trackColor={{ false: THEME.border, true: THEME.primaryDark }}
@@ -526,6 +528,7 @@ export default function SettingsScreen() {
               </View>
             </View>
             <Switch
+              accessibilityLabel="Toggle auto advance"
               value={settings.autoAdvance}
               onValueChange={(v) => updateSetting('autoAdvance', v)}
               trackColor={{ false: THEME.border, true: THEME.primaryDark }}
@@ -670,6 +673,7 @@ export default function SettingsScreen() {
               </View>
             </View>
             <Switch
+              accessibilityLabel="Toggle image caching"
               value={CACHE_AVAILABLE && settings.cacheEnabled}
               onValueChange={(v) => updateSetting('cacheEnabled', v)}
               disabled={!CACHE_AVAILABLE}

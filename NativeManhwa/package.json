@@ -20,6 +20,7 @@
     "build:android:local:fast": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android-release.ps1 -SkipPrebuild",
     "install:android:local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android-release.ps1 -Install",
     "install:android:local:fast": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android-release.ps1 -SkipPrebuild -Install",
+    "adb:apply-ota": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/adb-apply-ota.ps1",
     "build:ios:preview": "eas build --platform ios --profile preview --non-interactive",
     "update:preview": "eas update --channel preview --environment preview",
     "update:production": "eas update --channel production --environment production"
