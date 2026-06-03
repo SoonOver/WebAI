@@ -289,20 +289,30 @@ export function MangaCard({ item, onPress }) {
   const imageUri = typeof item?.image === 'string' ? item.image : '';
   const itemUrl = typeof item?.url === 'string' ? item.url : '';
   const title = typeof item?.title === 'string' && item.title.trim() ? item.title.trim() : 'Untitled';
+  const [imageFailed, setImageFailed] = useState(false);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [imageUri]);
+
   return (
     <TouchableOpacity style={[styles.card, { width: cardWidth }]} activeOpacity={0.9} onPress={onPress}>
       <View style={styles.cardImageWrap}>
-        {imageUri ? (
+        {imageUri && !imageFailed ? (
           <Image
             source={{
               uri: imageUri,
-              headers: imageHeaders(itemUrl),
+              headers: imageHeaders(itemUrl, imageUri),
             }}
             style={styles.image}
+            onError={() => setImageFailed(true)}
           />
         ) : (
           <View style={[styles.image, styles.cardImageFallback]}>
             <Ionicons name="image-outline" size={28} color={THEME.textMuted} />
+            <Text style={styles.cardImageFallbackText} numberOfLines={3}>
+              {title}
+            </Text>
           </View>
         )}
         <View style={styles.sourceBadge}>
@@ -564,7 +574,19 @@ const styles = StyleSheet.create({
   },
   cardImageWrap: { position: 'relative' },
   image: { width: '100%', aspectRatio: 0.7, backgroundColor: THEME.surface },
-  cardImageFallback: { alignItems: 'center', justifyContent: 'center' },
+  cardImageFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: THEME.space.md,
+  },
+  cardImageFallbackText: {
+    color: THEME.textSecondary,
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 17,
+    marginTop: THEME.space.sm,
+    textAlign: 'center',
+  },
   imageFallback: { backgroundColor: THEME.surface, alignItems: 'center', justifyContent: 'center' },
   imageFallbackText: { color: THEME.textMuted, fontSize: 12, marginTop: 8 },
   containImageFrame: {

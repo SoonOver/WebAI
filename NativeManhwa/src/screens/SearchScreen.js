@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
+  Keyboard,
   StyleSheet,
   Platform,
 } from 'react-native';
@@ -58,6 +59,7 @@ export default function SearchScreen({ navigation }) {
       setManga([]);
       return;
     }
+    Keyboard.dismiss();
     const searchId = ++searchIdRef.current;
     setSearching(true);
     try {
@@ -116,7 +118,18 @@ export default function SearchScreen({ navigation }) {
           onChangeText={handleQueryChange}
           onSubmitEditing={search}
           returnKeyType="search"
+          blurOnSubmit
         />
+        {query ? (
+          <TouchableOpacity
+            accessibilityLabel="Clear search"
+            onPress={() => handleQueryChange('')}
+            style={styles.searchClear}
+            activeOpacity={0.75}
+          >
+            <Ionicons name="close-circle" size={18} color={THEME.textMuted} />
+          </TouchableOpacity>
+        ) : null}
         <TouchableOpacity
           onPress={search}
           style={[styles.searchGo, !query.trim() && styles.searchGoDisabled]}
@@ -207,6 +220,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: THEME.space.lg,
     borderRadius: THEME.radius.sm,
     marginLeft: THEME.space.sm,
+  },
+  searchClear: {
+    width: 34,
+    minHeight: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: THEME.space.xs,
   },
   searchGoDisabled: {
     opacity: 0.45,
