@@ -320,6 +320,23 @@ export default function ReaderScreen({ route, navigation }) {
             />
           </TouchableOpacity>
           <TouchableOpacity
+            onPress={() => loadImages(url, 0)}
+            hitSlop={6}
+            disabled={changingChapter}
+            accessibilityLabel="Reload chapter pages"
+            activeOpacity={0.72}
+            style={[
+              styles.readerIconButton,
+              changingChapter && styles.readerIconButtonDisabled,
+            ]}
+          >
+            <Ionicons
+              name="refresh-outline"
+              size={22}
+              color={changingChapter ? THEME.textMuted : THEME.text}
+            />
+          </TouchableOpacity>
+          <TouchableOpacity
             onPress={toggleReaderMode}
             hitSlop={6}
             accessibilityLabel={mode === 'webtoon' ? 'Switch to page mode' : 'Switch to scroll mode'}

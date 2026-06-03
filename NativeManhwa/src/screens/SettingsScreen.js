@@ -20,6 +20,7 @@ import { Storage, DownloadManager } from '../storage';
 import {
   canUseAppUpdates,
   checkForAppUpdate,
+  getAppUpdateInfo,
   reloadAppUpdate,
 } from '../services/appUpdates';
 
@@ -40,6 +41,7 @@ export default function SettingsScreen() {
   const [cacheInfo, setCacheInfo] = useState({ exists: false, count: 0 });
   const [historyCount, setHistoryCount] = useState(0);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState(() => getAppUpdateInfo());
 
   const loadSettings = useCallback(async () => {
     try {
@@ -82,6 +84,7 @@ export default function SettingsScreen() {
       loadSettings();
       checkCacheStatus();
       loadHistoryCount();
+      setUpdateInfo(getAppUpdateInfo());
     }, [loadSettings, checkCacheStatus, loadHistoryCount])
   );
 
@@ -157,15 +160,23 @@ export default function SettingsScreen() {
       if (result.status === 'ready') {
         Alert.alert(
           'Update ready',
-          'A new update has been downloaded. Restart the app now?',
+          result.updateId
+            ? `Update ${result.updateId} has been downloaded. Restart the app now?`
+            : 'A new update has been downloaded. Restart the app now?',
           [
             { text: 'Later', style: 'cancel' },
             { text: 'Restart', onPress: reloadAppUpdate },
           ]
         );
       } else {
-        Alert.alert('App updates', 'You are already on the latest update.');
+        Alert.alert(
+          'App updates',
+          result.reason
+            ? `You are already on the latest update.\n\nReason: ${result.reason}`
+            : 'You are already on the latest update.'
+        );
       }
+      setUpdateInfo(getAppUpdateInfo());
     } catch {
       Alert.alert('App updates', 'Unable to check for updates right now.');
     } finally {
@@ -184,6 +195,10 @@ export default function SettingsScreen() {
   const hasCache = CACHE_AVAILABLE && cacheInfo.exists && cacheInfo.count > 0;
   const hasHistory = historyCount > 0;
   const updatesAvailable = canUseAppUpdates();
+  const updateRuntimeLabel = `Channel ${updateInfo.channel} · Runtime ${updateInfo.runtimeVersion}`;
+  const updateStatusLabel = updateInfo.enabled
+    ? `${updateInfo.isEmbeddedLaunch ? 'Embedded build' : 'OTA update'} · ${updateInfo.updateId}`
+    : 'Unavailable in Expo Go or web preview';
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
@@ -431,6 +446,32 @@ export default function SettingsScreen() {
             <View style={styles.rowLeft}>
               <View style={styles.iconWrap}>
                 <Ionicons
+                  name="git-branch-outline"
+                  size={20}
+                  color={updatesAvailable ? THEME.primary : THEME.textMuted}
+                />
+              </View>
+              <View style={styles.rowText}>
+                <Text style={styles.rowLabel}>Running update</Text>
+                <Text style={styles.rowDescription}>
+                  {updateRuntimeLabel}
+                </Text>
+                <Text style={styles.rowDescription}>
+                  {updateInfo.createdAt ? `${updateStatusLabel} · ${updateInfo.createdAt}` : updateStatusLabel}
+                </Text>
+                {updateInfo.isEmergencyLaunch && updateInfo.emergencyLaunchReason ? (
+                  <Text style={styles.warningText} numberOfLines={2}>
+                    {updateInfo.emergencyLaunchReason}
+                  </Text>
+                ) : null}
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.row}>
+            <View style={styles.rowLeft}>
+              <View style={styles.iconWrap}>
+                <Ionicons
                   name="cloud-download-outline"
                   size={20}
                   color={updatesAvailable ? THEME.success : THEME.textMuted}
@@ -532,6 +573,12 @@ const styles = StyleSheet.create({
     color: THEME.textMuted,
     fontSize: 12,
     lineHeight: 16,
+  },
+  warningText: {
+    color: THEME.warning,
+    fontSize: 12,
+    lineHeight: 16,
+    marginTop: THEME.space.xs,
   },
   actionBtn: {
     backgroundColor: THEME.danger,

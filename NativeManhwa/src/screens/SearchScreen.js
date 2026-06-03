@@ -24,6 +24,13 @@ import {
 } from '../components/UIComponents';
 
 const DEFAULT_SOURCE = Platform.OS === 'web' ? 'MangaDex (Bahasa Indonesia)' : ALL_ID_SOURCE;
+const QUICK_SEARCHES = [
+  'The Greatest Estate Developer',
+  'I Will Teach You Self Defense',
+  'Eleceed',
+  'Solo Leveling',
+  'Lookism',
+];
 
 export default function SearchScreen({ navigation }) {
   const [query, setQuery] = useState('');
@@ -52,8 +59,8 @@ export default function SearchScreen({ navigation }) {
     setFilters((prev) => sanitizeCatalogFilters(nextSource, prev));
   }, []);
 
-  const search = useCallback(async () => {
-    const trimmedQuery = query.trim();
+  const search = useCallback(async (nextQuery = query) => {
+    const trimmedQuery = String(nextQuery || '').trim();
     if (!trimmedQuery) {
       setSubmittedQuery('');
       setManga([]);
@@ -84,6 +91,11 @@ export default function SearchScreen({ navigation }) {
       }
     }
   }, [source, query, filters]);
+
+  const handleQuickSearch = useCallback((term) => {
+    setQuery(term);
+    search(term);
+  }, [search]);
 
   const renderEmpty = () => {
     if (searching) return null;
@@ -125,7 +137,7 @@ export default function SearchScreen({ navigation }) {
           placeholderTextColor={THEME.textMuted}
           value={query}
           onChangeText={handleQueryChange}
-          onSubmitEditing={search}
+          onSubmitEditing={() => search()}
           returnKeyType="search"
           blurOnSubmit
         />
@@ -140,7 +152,7 @@ export default function SearchScreen({ navigation }) {
           </TouchableOpacity>
         ) : null}
         <TouchableOpacity
-          onPress={search}
+          onPress={() => search()}
           style={[styles.searchGo, !query.trim() && styles.searchGoDisabled]}
           activeOpacity={0.8}
           disabled={!query.trim() || searching}
@@ -151,6 +163,33 @@ export default function SearchScreen({ navigation }) {
             <Text style={styles.searchGoText}>Go</Text>
           )}
         </TouchableOpacity>
+      </View>
+      <View style={styles.quickSearchWrap}>
+        <Text style={styles.quickSearchLabel}>Quick search</Text>
+        <FlatList
+          horizontal
+          data={QUICK_SEARCHES}
+          keyExtractor={(item) => item}
+          showsHorizontalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={styles.quickSearchList}
+          renderItem={({ item }) => (
+            <TouchableOpacity
+              style={[
+                styles.quickSearchChip,
+                submittedQuery === item && styles.quickSearchChipActive,
+              ]}
+              onPress={() => handleQuickSearch(item)}
+              activeOpacity={0.78}
+              disabled={searching && submittedQuery === item}
+            >
+              <Ionicons name="flash-outline" size={13} color={THEME.primary} />
+              <Text style={styles.quickSearchText} numberOfLines={1}>
+                {item}
+              </Text>
+            </TouchableOpacity>
+          )}
+        />
       </View>
       <SourceSegment value={source} onChange={handleSourceChange} />
       <CatalogFilters source={source} value={filters} onChange={setFilters} />
@@ -252,5 +291,44 @@ const styles = StyleSheet.create({
     color: THEME.text,
     fontWeight: '700',
     fontSize: 14,
+  },
+  quickSearchWrap: {
+    marginBottom: THEME.space.sm,
+  },
+  quickSearchLabel: {
+    color: THEME.textMuted,
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    paddingHorizontal: THEME.space.lg,
+    marginBottom: THEME.space.xs,
+    letterSpacing: 0,
+  },
+  quickSearchList: {
+    paddingHorizontal: THEME.space.lg,
+    paddingRight: THEME.space.xl,
+    gap: THEME.space.sm,
+  },
+  quickSearchChip: {
+    minHeight: 34,
+    maxWidth: 220,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: THEME.space.sm,
+    paddingHorizontal: THEME.space.md,
+    borderRadius: THEME.radius.pill,
+    backgroundColor: THEME.surfaceElevated,
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
+  quickSearchChipActive: {
+    borderColor: THEME.primary,
+    backgroundColor: THEME.surface,
+  },
+  quickSearchText: {
+    color: THEME.textSecondary,
+    fontSize: 12,
+    fontWeight: '700',
   },
 });
