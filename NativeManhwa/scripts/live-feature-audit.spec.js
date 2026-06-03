@@ -58,7 +58,7 @@ async function expectNoConsoleErrors(errors, checkpoint) {
 
 test.describe.configure({ mode: 'serial' });
 
-test('NativeManhwa live feature audit', async ({ page }) => {
+test('WibuNgomik live feature audit', async ({ page }) => {
   test.setTimeout(300000);
   const consoleErrors = [];
   const dialogs = [];
@@ -86,7 +86,7 @@ test('NativeManhwa live feature audit', async ({ page }) => {
   }
   expect(text).toContain('MD · ID');
   expect((await loadedImageStats(page)).loaded).toBeGreaterThan(0);
-  await page.screenshot({ path: outFile('nativemanhwa-live-home.png') });
+  await page.screenshot({ path: outFile('wibungomik-live-home.png') });
   results.push('Home loads with default MD · ID catalog, bottom tabs, and images');
 
   await clickVisibleText(page, 'Filters');
@@ -125,7 +125,7 @@ test('NativeManhwa live feature audit', async ({ page }) => {
   await page.waitForTimeout(12000);
   text = await bodyText(page);
   expect(text.toLowerCase()).toContain('osoraku');
-  await page.screenshot({ path: outFile('nativemanhwa-live-search.png') });
+  await page.screenshot({ path: outFile('wibungomik-live-search.png') });
   results.push('Search accepts a keyword and renders result cards');
 
   await clickVisibleText(page, 'Osoraku', false);
@@ -151,7 +151,7 @@ test('NativeManhwa live feature audit', async ({ page }) => {
   await page.waitForTimeout(1000);
   text = await bodyText(page);
   expect(text).toContain('Oldest');
-  await page.screenshot({ path: outFile('nativemanhwa-live-details.png') });
+  await page.screenshot({ path: outFile('wibungomik-live-details.png') });
   results.push('Details page loads, description expands, bookmark toggles, chapter search/order works');
 
   await clickVisibleText(page, 'Start Reading');
@@ -160,7 +160,7 @@ test('NativeManhwa live feature audit', async ({ page }) => {
   expect(text).toMatch(/\d+\s*\/\s*\d+\s*·\s*\d+\s*pages?/);
   let imageStats = await loadedImageStats(page);
   expect(imageStats.loaded).toBeGreaterThan(0);
-  await page.screenshot({ path: outFile('nativemanhwa-live-reader.png') });
+  await page.screenshot({ path: outFile('wibungomik-live-reader.png') });
   results.push('Reader opens, shows chapter progress/page count, and loads panel images');
 
   const switchMode = page.getByLabel('Switch to page mode');
@@ -206,13 +206,13 @@ test('NativeManhwa live feature audit', async ({ page }) => {
   await page.waitForTimeout(1500);
   text = await bodyText(page);
   expect(text).toContain('Downloads');
-  await page.screenshot({ path: outFile('nativemanhwa-live-library.png') });
+  await page.screenshot({ path: outFile('wibungomik-live-library.png') });
   results.push('Library shows bookmark tab and downloads tab without crashing');
 
   await clickBottomTab(page, 'Settings');
   await waitForText(page, 'App preferences');
   text = await bodyText(page);
-  for (const label of ['Auto-advance', 'Default reader mode', 'Image caching', 'Cache status', 'Reading history', 'NativeManhwa']) {
+  for (const label of ['Auto-advance', 'Default reader mode', 'Image caching', 'Cache status', 'Reading history', 'WibuNgomik']) {
     expect(text).toContain(label);
   }
   const versionLabel = page.getByText(`Version ${APP_VERSION}`, { exact: true });
@@ -222,12 +222,12 @@ test('NativeManhwa live feature audit', async ({ page }) => {
   await page.waitForTimeout(1000);
   text = await bodyText(page);
   expect(text.includes('Webtoon') || text.includes('Page')).toBeTruthy();
-  await page.screenshot({ path: outFile('nativemanhwa-live-settings.png') });
+  await page.screenshot({ path: outFile('wibungomik-live-settings.png') });
   results.push(`Settings renders controls, reader mode toggles, and app version ${APP_VERSION}`);
 
   await expectNoConsoleErrors(consoleErrors, 'final');
   fs.writeFileSync(
-    outFile('nativemanhwa-live-audit-result.json'),
+    outFile('wibungomik-live-audit-result.json'),
     JSON.stringify({ ok: true, results, dialogs, consoleErrors, providerChecks }, null, 2),
   );
 });

@@ -40,6 +40,7 @@ export default function SearchScreen({ navigation }) {
   const [filters, setFilters] = useState(() => sanitizeCatalogFilters(DEFAULT_SOURCE));
   const [searching, setSearching] = useState(false);
   const searchIdRef = useRef(0);
+  const showQuickSearch = source === ALL_ID_SOURCE;
 
   useEffect(() => {
     searchIdRef.current += 1;
@@ -164,33 +165,35 @@ export default function SearchScreen({ navigation }) {
           )}
         </TouchableOpacity>
       </View>
-      <View style={styles.quickSearchWrap}>
-        <Text style={styles.quickSearchLabel}>Quick search</Text>
-        <FlatList
-          horizontal
-          data={QUICK_SEARCHES}
-          keyExtractor={(item) => item}
-          showsHorizontalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          contentContainerStyle={styles.quickSearchList}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={[
-                styles.quickSearchChip,
-                submittedQuery === item && styles.quickSearchChipActive,
-              ]}
-              onPress={() => handleQuickSearch(item)}
-              activeOpacity={0.78}
-              disabled={searching && submittedQuery === item}
-            >
-              <Ionicons name="flash-outline" size={13} color={THEME.primary} />
-              <Text style={styles.quickSearchText} numberOfLines={1}>
-                {item}
-              </Text>
-            </TouchableOpacity>
-          )}
-        />
-      </View>
+      {showQuickSearch ? (
+        <View style={styles.quickSearchWrap}>
+          <Text style={styles.quickSearchLabel}>Quick search</Text>
+          <FlatList
+            horizontal
+            data={QUICK_SEARCHES}
+            keyExtractor={(item) => item}
+            showsHorizontalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.quickSearchList}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={[
+                  styles.quickSearchChip,
+                  submittedQuery === item && styles.quickSearchChipActive,
+                ]}
+                onPress={() => handleQuickSearch(item)}
+                activeOpacity={0.78}
+                disabled={searching && submittedQuery === item}
+              >
+                <Ionicons name="flash-outline" size={13} color={THEME.primary} />
+                <Text style={styles.quickSearchText} numberOfLines={1}>
+                  {item}
+                </Text>
+              </TouchableOpacity>
+            )}
+          />
+        </View>
+      ) : null}
       <SourceSegment value={source} onChange={handleSourceChange} />
       <CatalogFilters source={source} value={filters} onChange={setFilters} />
       {searching ? (

@@ -63,7 +63,7 @@ async function ensureFiltersOpen(page) {
 
 test.describe.configure({ mode: 'serial' });
 
-test('NativeManhwa button-by-button interaction audit', async ({ page }) => {
+test('WibuNgomik button-by-button interaction audit', async ({ page }) => {
   test.setTimeout(360000);
   const consoleErrors = [];
   const dialogs = [];
@@ -239,7 +239,7 @@ test('NativeManhwa button-by-button interaction audit', async ({ page }) => {
   expect(fatal).toEqual([]);
 
   fs.writeFileSync(
-    outFile('nativemanhwa-live-button-audit-result.json'),
+    outFile('wibungomik-live-button-audit-result.json'),
     JSON.stringify({ ok: true, results, dialogs, consoleErrors }, null, 2),
   );
 });

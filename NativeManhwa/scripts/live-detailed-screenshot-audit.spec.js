@@ -125,7 +125,7 @@ async function screenshot(page, screenshots, fileName, label) {
 
 test.describe.configure({ mode: 'serial' });
 
-test('NativeManhwa detailed feature screenshots', async ({ page }) => {
+test('WibuNgomik detailed feature screenshots', async ({ page }) => {
   test.setTimeout(420000);
   ensureOutDir();
 
@@ -280,7 +280,7 @@ test('NativeManhwa detailed feature screenshots', async ({ page }) => {
   await clickBottomTab(page, 'Settings');
   await expect(page.getByText('App preferences', { exact: false }).first()).toBeVisible({ timeout: 20000 });
   text = await bodyText(page);
-  for (const label of ['Auto-advance', 'Default reader mode', 'Image caching', 'Cache status', 'Reading history', 'NativeManhwa']) {
+  for (const label of ['Auto-advance', 'Default reader mode', 'Image caching', 'Cache status', 'Reading history', 'WibuNgomik']) {
     expect(text).toContain(label);
   }
   const switches = page.locator('[role="switch"]');

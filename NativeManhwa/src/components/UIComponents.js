@@ -218,7 +218,9 @@ export function AutoHeightImage({
   }, [canUseHeaders, imageUri, onSize, referer]);
   const resolvedImageSource = imageSource(imageUri, referer);
   const hasNaturalSize = naturalSize.width > 0 && naturalSize.height > 0;
-  const displayWidth = nativePixelWidth(width, naturalSize.width, qualityMode);
+  const displayWidth = fit === 'width'
+    ? width
+    : nativePixelWidth(width, naturalSize.width, qualityMode);
   const displayHeight = hasNaturalSize
     ? naturalSize.height * (displayWidth / naturalSize.width)
     : 400;

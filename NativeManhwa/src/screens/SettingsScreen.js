@@ -283,7 +283,7 @@ export default function SettingsScreen() {
                 <Text style={styles.rowLabel}>Image quality</Text>
                 <Text style={styles.rowDescription}>
                   {settings.imageQuality === 'sharp'
-                    ? 'Adaptive anti-blur for low-res panels'
+                    ? 'Webtoon fills screen width; page mode avoids harsh upscaling'
                     : 'Fill screen width even on low-res panels'}
                 </Text>
               </View>
@@ -434,7 +434,7 @@ export default function SettingsScreen() {
                 />
               </View>
               <View style={styles.rowText}>
-                <Text style={styles.rowLabel}>NativeManhwa</Text>
+                <Text style={styles.rowLabel}>WibuNgomik</Text>
                 <Text style={styles.rowDescription}>
                   Version {APP_VERSION}
                 </Text>
