@@ -6,13 +6,18 @@ ios/
 node_modules/
 .expo/
 dist/
+dist-check/
 web-build/
+artifacts/
 
 # Local audit/dev artifacts.
 .expo-dev-server.*
 audit-screenshots/
 test-results/
 task_progress.md
+nativemanhwa-live-*.png
+nativemanhwa-live-*-result.json
+tmp-android-export/
 
 # Local-only environment files.
 .env*.local
