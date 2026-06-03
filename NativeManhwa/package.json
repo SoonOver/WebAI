@@ -16,7 +16,9 @@
     "build:android:preview": "eas build --platform android --profile preview --non-interactive",
     "build:android:prod": "eas build --platform android --profile production --non-interactive",
     "build:android:local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android-release.ps1",
+    "build:android:local:fast": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android-release.ps1 -SkipPrebuild",
     "install:android:local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android-release.ps1 -Install",
+    "install:android:local:fast": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android-release.ps1 -SkipPrebuild -Install",
     "build:ios:preview": "eas build --platform ios --profile preview --non-interactive",
     "update:preview": "eas update --channel preview",
     "update:production": "eas update --channel production"
