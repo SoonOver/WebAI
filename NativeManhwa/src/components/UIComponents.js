@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, Image, Pressable, ScrollView, Platform, TouchableOpacity, StyleSheet, useWindowDimensions } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Ionicons } from '@expo/vector-icons';
@@ -199,6 +199,7 @@ export function AutoHeightImage({ source, referer, fit = 'width', topInset = 0, 
 }
 
 export function SourceSegment({ value, onChange }) {
+  const scrollRef = useRef(null);
   const enabledSources = Platform.OS === 'web' ? WEB_SOURCE_ORDER : SOURCE_PICKER_ORDER;
   const sources = Platform.OS === 'web'
     ? [
@@ -206,8 +207,18 @@ export function SourceSegment({ value, onChange }) {
         ...SOURCE_PICKER_ORDER.filter((source) => !WEB_SOURCE_ORDER.includes(source)),
       ]
     : enabledSources;
+  const activeIndex = Math.max(0, sources.indexOf(value));
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({
+      x: Math.max(0, activeIndex * 116 - 24),
+      animated: true,
+    });
+  }, [activeIndex]);
+
   return (
     <ScrollView
+      ref={scrollRef}
       horizontal
       showsHorizontalScrollIndicator={false}
       contentContainerStyle={styles.sourceBarScroll}
