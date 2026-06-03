@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -11,9 +11,11 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { ALL_ID_SOURCE, Scraper, sanitizeCatalogFilters } from '../../scrapers';
 import { THEME } from '../theme';
+import { Storage } from '../storage';
 import {
   ScreenHeader,
   SourceSegment,
@@ -65,13 +67,34 @@ export default function HomeScreen({ navigation }) {
   const [error, setError] = useState(null);
   const [source, setSource] = useState(DEFAULT_SOURCE);
   const [filters, setFilters] = useState(() => sanitizeCatalogFilters(DEFAULT_SOURCE));
+  const [safeMode, setSafeMode] = useState(true);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const sourceRef = useRef(source);
   const filtersRef = useRef(filters);
   const loadIdRef = useRef(0);
+  const effectiveFilters = useMemo(
+    () => ({ ...filters, safeMode }),
+    [filters, safeMode],
+  );
   sourceRef.current = source;
-  filtersRef.current = filters;
+  filtersRef.current = effectiveFilters;
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      Storage.getSettings()
+        .then((settings) => {
+          if (active) setSafeMode(settings.safeMode !== false);
+        })
+        .catch(() => {
+          if (active) setSafeMode(true);
+        });
+      return () => {
+        active = false;
+      };
+    }, []),
+  );
 
   const fetchLatest = useCallback(
     async (pageNum) => {
@@ -159,7 +182,7 @@ export default function HomeScreen({ navigation }) {
 
   useEffect(() => {
     load(1);
-  }, [load, source, filters]);
+  }, [load, source, filters, safeMode]);
 
   const renderItem = useCallback(
     ({ item }) => (
@@ -189,13 +212,13 @@ export default function HomeScreen({ navigation }) {
       <>
         <ScreenHeader
           title="Discover"
-          subtitle="Latest series from your selected source"
+          subtitle={safeMode ? 'Latest safe picks from your selected source' : 'Latest series from your selected source'}
         />
         <SourceSegment value={source} onChange={handleSourceChange} />
         <CatalogFilters source={source} value={filters} onChange={setFilters} />
       </>
     ),
-    [source, filters, handleSourceChange],
+    [source, filters, handleSourceChange, safeMode],
   );
 
   const renderFooter = useCallback(() => {
@@ -213,7 +236,7 @@ export default function HomeScreen({ navigation }) {
       <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
         <ScreenHeader
           title="Discover"
-          subtitle="Latest series from your selected source"
+          subtitle={safeMode ? 'Latest safe picks from your selected source' : 'Latest series from your selected source'}
         />
         <SourceSegment value={source} onChange={handleSourceChange} />
         <CatalogFilters source={source} value={filters} onChange={setFilters} />
@@ -230,7 +253,7 @@ export default function HomeScreen({ navigation }) {
       <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
         <ScreenHeader
           title="Discover"
-          subtitle="Latest series from your selected source"
+          subtitle={safeMode ? 'Latest safe picks from your selected source' : 'Latest series from your selected source'}
         />
         <SourceSegment value={source} onChange={handleSourceChange} />
         <CatalogFilters source={source} value={filters} onChange={setFilters} />

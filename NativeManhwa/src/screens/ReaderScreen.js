@@ -62,14 +62,17 @@ export default function ReaderScreen({ route, navigation }) {
   const [settings, setSettings] = useState({
     autoAdvance: false,
     cacheEnabled: true,
-    imageQuality: 'sharp',
+    imageQuality: 'full',
+    panelSpacing: 'none',
     readerMode: 'webtoon',
+    safeMode: true,
   });
   const settingsRef = useRef(settings);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [changingChapter, setChangingChapter] = useState(false);
   const changingChapterRef = useRef(false);
   const loadGenRef = useRef(0);
+  const listRef = useRef(null);
 
   // Load settings on mount and whenever screen is focused
   useFocusEffect(
@@ -190,6 +193,25 @@ export default function ReaderScreen({ route, navigation }) {
     try {
       await Storage.saveSettings(nextSettings);
     } catch (_) {}
+  }, [mode]);
+
+  const cycleImageQuality = useCallback(async () => {
+    const current = settingsRef.current.imageQuality;
+    const nextQuality = current === 'full' ? 'sharp' : current === 'sharp' ? 'original' : 'full';
+    const nextSettings = { ...settingsRef.current, imageQuality: nextQuality };
+    setSettings(nextSettings);
+    settingsRef.current = nextSettings;
+    try {
+      await Storage.saveSettings(nextSettings);
+    } catch (_) {}
+  }, []);
+
+  const scrollToTop = useCallback(() => {
+    if (mode === 'manga') {
+      listRef.current?.scrollToIndex?.({ index: 0, animated: true });
+    } else {
+      listRef.current?.scrollToOffset?.({ offset: 0, animated: true });
+    }
   }, [mode]);
 
   const saveReaderHistory = useCallback((chapter) => {
@@ -366,6 +388,7 @@ export default function ReaderScreen({ route, navigation }) {
         </View>
       ) : (
         <FlatList
+          ref={listRef}
           key={mode}
           data={images}
           keyExtractor={(_, i) => i.toString()}
@@ -388,18 +411,44 @@ export default function ReaderScreen({ route, navigation }) {
               : undefined
           }
           renderItem={({ item, index }) => (
-            <AutoHeightImage
-              source={item}
-              referer={url}
-              fit={mode === 'manga' ? 'contain' : 'width'}
-              topInset={mode === 'manga' ? headerPadTop + 58 : 0}
-              bottomInset={mode === 'manga' ? insets.bottom + THEME.space.sm : 0}
-              qualityMode={settings.imageQuality}
-              onSize={(size) => handleImageSize(index, size)}
-            />
+            <View style={mode === 'webtoon' && settings.panelSpacing === 'comfortable' ? styles.webtoonPanelGap : null}>
+              <AutoHeightImage
+                source={item}
+                referer={url}
+                fit={mode === 'manga' ? 'contain' : 'width'}
+                topInset={mode === 'manga' ? headerPadTop + 58 : 0}
+                bottomInset={mode === 'manga' ? insets.bottom + THEME.space.sm : 0}
+                qualityMode={settings.imageQuality}
+                onSize={(size) => handleImageSize(index, size)}
+              />
+            </View>
           )}
         />
       )}
+      {images.length > 0 ? (
+        <View style={[styles.readerFloatingBar, { bottom: insets.bottom + THEME.space.md }]}>
+          <TouchableOpacity
+            onPress={scrollToTop}
+            accessibilityLabel="Jump to top"
+            activeOpacity={0.72}
+            style={styles.readerFloatingButton}
+          >
+            <Ionicons name="arrow-up" size={20} color={THEME.text} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={cycleImageQuality}
+            accessibilityLabel="Cycle panel quality"
+            activeOpacity={0.72}
+            style={styles.readerFloatingButton}
+          >
+            <Ionicons
+              name={settings.imageQuality === 'full' ? 'expand' : settings.imageQuality === 'sharp' ? 'scan' : 'contract'}
+              size={20}
+              color={THEME.text}
+            />
+          </TouchableOpacity>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -500,5 +549,28 @@ const styles = StyleSheet.create({
     color: THEME.text,
     fontWeight: '700',
     fontSize: 15,
+  },
+  webtoonPanelGap: {
+    marginBottom: THEME.space.sm,
+  },
+  readerFloatingBar: {
+    position: 'absolute',
+    right: THEME.space.md,
+    flexDirection: 'row',
+    gap: THEME.space.sm,
+    backgroundColor: 'rgba(0,0,0,0.62)',
+    borderRadius: THEME.radius.pill,
+    padding: THEME.space.xs,
+    zIndex: 11,
+  },
+  readerFloatingButton: {
+    width: 42,
+    height: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: THEME.radius.pill,
+    backgroundColor: 'rgba(26,36,56,0.92)',
+    borderWidth: 1,
+    borderColor: THEME.border,
   },
 });

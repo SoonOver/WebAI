@@ -262,16 +262,26 @@ export function ProtectedImage({ uri, referer, style, resizeMode = 'cover', onEr
   );
 }
 
-function ImageFallback({ height = 300, width }) {
+function ImageFallback({ height = 300, width, onRetry }) {
   return (
     <View style={[styles.imageFallback, { width, height }]}>
       <Ionicons name="image-outline" size={32} color={THEME.textMuted} />
       <Text style={styles.imageFallbackText}>No image</Text>
+      {onRetry ? (
+        <Pressable style={styles.imageRetryButton} onPress={onRetry}>
+          <Ionicons name="refresh-outline" size={14} color={THEME.text} />
+          <Text style={styles.imageRetryText}>Retry</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
 
 function nativePixelWidth(layoutWidth, naturalWidth, qualityMode) {
+  if (qualityMode === 'original' && naturalWidth > 0) {
+    return Math.max(1, Math.min(layoutWidth, naturalWidth / DEVICE_PIXEL_RATIO));
+  }
+  if (qualityMode === 'full') return layoutWidth;
   if (qualityMode !== 'sharp' || !naturalWidth || naturalWidth <= 0) return layoutWidth;
   return Math.max(1, Math.min(layoutWidth, (naturalWidth * SHARP_MAX_UPSCALE) / DEVICE_PIXEL_RATIO));
 }
@@ -337,7 +347,12 @@ export function AutoHeightImage({
   const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
   const [pixelSize, setPixelSize] = useState({ width: 0, height: 0 });
   const [failed, setFailed] = useState(false);
+  const [retryVersion, setRetryVersion] = useState(0);
   const canUseHeaders = Platform.OS !== 'web';
+  const retryImage = () => {
+    setFailed(false);
+    setRetryVersion((value) => value + 1);
+  };
   useEffect(() => {
     let active = true;
     setFailed(false);
@@ -409,7 +424,7 @@ export function AutoHeightImage({
     return () => {
       active = false;
     };
-  }, [canUseHeaders, imageUri, onSize, referer, sourceUri]);
+  }, [canUseHeaders, imageUri, onSize, referer, retryVersion, sourceUri]);
   const resolvedImageSource = imageSource(imageUri, referer);
   const measuredSize = pixelSize.width > 0 && pixelSize.height > 0 ? pixelSize : naturalSize;
   const hasNaturalSize = measuredSize.width > 0 && measuredSize.height > 0;
@@ -421,22 +436,22 @@ export function AutoHeightImage({
     const frameHeight = Math.max(260, windowHeight - topInset - bottomInset);
     const naturalWidthDp = hasNaturalSize ? measuredSize.width / DEVICE_PIXEL_RATIO : 0;
     const naturalHeightDp = hasNaturalSize ? measuredSize.height / DEVICE_PIXEL_RATIO : 0;
-    const sharpScale = hasNaturalSize
+    const naturalScale = hasNaturalSize
       ? Math.min(1, width / naturalWidthDp, frameHeight / naturalHeightDp)
       : 1;
-    const containWidth = qualityMode === 'sharp' && hasNaturalSize
-      ? naturalWidthDp * sharpScale
+    const containWidth = qualityMode !== 'full' && hasNaturalSize
+      ? naturalWidthDp * naturalScale
       : width;
-    const containHeight = qualityMode === 'sharp' && hasNaturalSize
-      ? naturalHeightDp * sharpScale
+    const containHeight = qualityMode !== 'full' && hasNaturalSize
+      ? naturalHeightDp * naturalScale
       : frameHeight;
     return (
       <View style={[styles.containImageFrame, { width, minHeight: windowHeight, paddingTop: topInset, paddingBottom: bottomInset }]}>
         {!imageUri || failed ? (
-          <ImageFallback height={frameHeight} width={width} />
+          <ImageFallback height={frameHeight} width={width} onRetry={imageUri ? retryImage : undefined} />
         ) : (
           <FadeInImage
-            imageKey={imageUri}
+            imageKey={`${imageUri}:${retryVersion}`}
             source={resolvedImageSource}
             style={{ width: containWidth, height: containHeight }}
             resizeMode="contain"
@@ -448,12 +463,12 @@ export function AutoHeightImage({
     );
   }
   if (!imageUri || failed) {
-    return <ImageFallback height={300} width={width} />;
+    return <ImageFallback height={300} width={width} onRetry={imageUri ? retryImage : undefined} />;
   }
   return (
     <View style={[styles.autoImageFrame, { width }]}>
       <FadeInImage
-        imageKey={imageUri}
+        imageKey={`${imageUri}:${retryVersion}`}
         source={resolvedImageSource}
         style={{ width: displayWidth, height: displayHeight }}
         resizeMode="contain"
@@ -669,6 +684,7 @@ export function MangaCard({ item, onPress, columns }) {
   const itemUrl = typeof item?.url === 'string' ? item.url : '';
   const imageUri = useProtectedImageUri(sourceImageUri, itemUrl);
   const title = typeof item?.title === 'string' && item.title.trim() ? item.title.trim() : 'Untitled';
+  const sourceCount = Number(item?.sourceCount) > 1 ? Number(item.sourceCount) : 1;
   const [imageFailed, setImageFailed] = useState(false);
 
   useEffect(() => {
@@ -694,7 +710,9 @@ export function MangaCard({ item, onPress, columns }) {
           </View>
         )}
         <View style={styles.sourceBadge}>
-          <Text style={styles.sourceBadgeText}>{sourceShortLabel(item?.source)}</Text>
+          <Text style={styles.sourceBadgeText}>
+            {sourceShortLabel(item?.source)}{sourceCount > 1 ? ` +${sourceCount - 1}` : ''}
+          </Text>
         </View>
       </View>
       <View style={styles.info}>
@@ -972,6 +990,21 @@ const styles = StyleSheet.create({
   },
   imageFallback: { backgroundColor: THEME.surface, alignItems: 'center', justifyContent: 'center' },
   imageFallbackText: { color: THEME.textMuted, fontSize: 12, marginTop: 8 },
+  imageRetryButton: {
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: THEME.space.md,
+    paddingHorizontal: THEME.space.md,
+    borderRadius: THEME.radius.sm,
+    backgroundColor: THEME.primaryDark,
+  },
+  imageRetryText: {
+    color: THEME.text,
+    fontSize: 12,
+    fontWeight: '700',
+  },
   containImageFrame: {
     backgroundColor: '#05070A',
     justifyContent: 'flex-start',

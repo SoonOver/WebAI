@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -13,9 +13,11 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { ALL_ID_SOURCE, Scraper, sanitizeCatalogFilters } from '../../scrapers';
+import { ALL_ID_SOURCE, Scraper, sanitizeCatalogFilters, sourceShortLabel } from '../../scrapers';
 import { THEME } from '../theme';
+import { Storage } from '../storage';
 import {
   ScreenHeader,
   SourceSegment,
@@ -41,16 +43,50 @@ export default function SearchScreen({ navigation }) {
   const [manga, setManga] = useState([]);
   const [source, setSource] = useState(DEFAULT_SOURCE);
   const [filters, setFilters] = useState(() => sanitizeCatalogFilters(DEFAULT_SOURCE));
+  const [safeMode, setSafeMode] = useState(true);
   const [searching, setSearching] = useState(false);
   const searchIdRef = useRef(0);
   const showQuickSearch = source === ALL_ID_SOURCE;
+  const effectiveFilters = useMemo(
+    () => ({ ...filters, safeMode }),
+    [filters, safeMode],
+  );
+  const sourceSummary = useMemo(() => {
+    if (!submittedQuery || manga.length === 0) return '';
+    const counts = new Map();
+    manga.forEach((item) => {
+      const sourceKey = item?.source || 'Unknown';
+      counts.set(sourceKey, (counts.get(sourceKey) || 0) + 1);
+    });
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([sourceKey, count]) => `${sourceShortLabel(sourceKey)} ${count}`)
+      .join(' · ');
+  }, [manga, submittedQuery]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      Storage.getSettings()
+        .then((settings) => {
+          if (active) setSafeMode(settings.safeMode !== false);
+        })
+        .catch(() => {
+          if (active) setSafeMode(true);
+        });
+      return () => {
+        active = false;
+      };
+    }, []),
+  );
 
   useEffect(() => {
     searchIdRef.current += 1;
     setManga([]);
     setSubmittedQuery('');
     setSearching(false);
-  }, [source, filters]);
+  }, [source, filters, safeMode]);
 
   const handleQueryChange = useCallback((nextValue) => {
     setQuery(nextValue);
@@ -74,7 +110,7 @@ export default function SearchScreen({ navigation }) {
     const searchId = ++searchIdRef.current;
     setSearching(true);
     try {
-      const data = await Scraper.fetchSearch(source, trimmedQuery, filters);
+      const data = await Scraper.fetchSearch(source, trimmedQuery, effectiveFilters);
       if (searchIdRef.current === searchId) {
         setSubmittedQuery(trimmedQuery);
         setManga(
@@ -94,7 +130,7 @@ export default function SearchScreen({ navigation }) {
         setSearching(false);
       }
     }
-  }, [source, query, filters]);
+  }, [source, query, effectiveFilters]);
 
   const handleQuickSearch = useCallback((term) => {
     setQuery(term);
@@ -132,7 +168,10 @@ export default function SearchScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
-      <ScreenHeader title="Search" subtitle="Find titles across your source" />
+      <ScreenHeader
+        title="Search"
+        subtitle={safeMode ? 'Find safe titles across your source' : 'Find titles across your source'}
+      />
       <View style={styles.searchBar}>
         <Ionicons name="search" size={20} color={THEME.textMuted} style={styles.searchIcon} />
         <TextInput
@@ -170,7 +209,7 @@ export default function SearchScreen({ navigation }) {
       </View>
       {showQuickSearch ? (
         <View style={styles.quickSearchWrap}>
-          <Text style={styles.quickSearchLabel}>Quick search</Text>
+          <Text style={styles.quickSearchLabel}>Popular on All ID</Text>
           <FlatList
             horizontal
             data={QUICK_SEARCHES}
@@ -199,6 +238,14 @@ export default function SearchScreen({ navigation }) {
       ) : null}
       <SourceSegment value={source} onChange={handleSourceChange} />
       <CatalogFilters source={source} value={filters} onChange={setFilters} />
+      {submittedQuery && manga.length > 0 ? (
+        <View style={styles.resultSummary}>
+          <Text style={styles.resultSummaryText} numberOfLines={1}>
+            {manga.length} result{manga.length === 1 ? '' : 's'}
+            {sourceSummary ? ` · ${sourceSummary}` : ''}
+          </Text>
+        </View>
+      ) : null}
       {searching ? (
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={THEME.primary} />
@@ -336,6 +383,21 @@ const styles = StyleSheet.create({
   },
   quickSearchText: {
     color: THEME.textSecondary,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  resultSummary: {
+    marginHorizontal: THEME.space.lg,
+    marginBottom: THEME.space.sm,
+    paddingVertical: THEME.space.sm,
+    paddingHorizontal: THEME.space.md,
+    borderRadius: THEME.radius.sm,
+    backgroundColor: THEME.surface,
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
+  resultSummaryText: {
+    color: THEME.textMuted,
     fontSize: 12,
     fontWeight: '700',
   },

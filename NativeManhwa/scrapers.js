@@ -354,6 +354,72 @@ function normalizeSearchText(value) {
     .trim();
 }
 
+const ADULT_TITLE_PATTERNS = [
+  /\b18\+?\b/i,
+  /\badult\b/i,
+  /\bsmut\b/i,
+  /\berotic\b/i,
+  /\berotica\b/i,
+  /\bmake\s+love\b/i,
+  /\blust\b/i,
+  /\bdesire\b/i,
+  /\bsexual\b/i,
+  /\bintercourse\b/i,
+  /\borgasm\b/i,
+  /\bfuck(?:s|ed|ing)?\b/i,
+  /\bcock\b/i,
+  /\bdick\b/i,
+  /\bpussy\b/i,
+  /\bslut\b/i,
+  /\brape\b/i,
+  /\brapist\b/i,
+  /\bbrothel\b/i,
+  /\bprostitut/i,
+  /\bnude\b/i,
+  /\bnaked\b/i,
+  /\bvirgin\b/i,
+  /\bbreeding\b/i,
+  /\bseduce\b/i,
+  /\bseduction\b/i,
+  /\baffair\b/i,
+  /\bmistress\b/i,
+  /\bconcubine\b/i,
+  /\baphrodisiac\b/i,
+  /\bharem\b/i,
+  /\bhentai\b/i,
+  /\bporn\b/i,
+  /\bporno\b/i,
+  /\bsex\b/i,
+  /\bsexi\b/i,
+  /\bsexy\b/i,
+  /\buncensored\b/i,
+  /\bmilf\b/i,
+  /\bnetorare\b/i,
+  /\bntr\b/i,
+  /\bincest\b/i,
+  /\bin\s+rut\b/i,
+  /\bbokep\b/i,
+  /\bmesum\b/i,
+  /\bdewasa\b/i,
+  /\bteacher\b.*\bself\s*defense\b/i,
+  /\bi\s*will\s*teach\s*you\s*self\s*defense\b/i,
+];
+
+export function isAdultMangaTitle(value) {
+  const title = cleanMangaTitle(value);
+  if (!title) return false;
+  return ADULT_TITLE_PATTERNS.some((pattern) => pattern.test(title));
+}
+
+function safeModeEnabled(filters = {}) {
+  return filters?.safeMode !== false;
+}
+
+function filterSafeMangaResults(items = [], filters = {}) {
+  if (!safeModeEnabled(filters)) return items;
+  return items.filter((item) => !isAdultMangaTitle(item?.title));
+}
+
 function searchTokens(value) {
   return normalizeSearchText(value)
     .split(/\s+/)
@@ -478,6 +544,47 @@ function dedupeMangaResults(items = []) {
   return results;
 }
 
+function titleDuplicateKey(item) {
+  return normalizeSearchText(item?.title)
+    .replace(/\b(?:manga|manhwa|manhua|komik)\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function mergeDuplicateTitles(items = []) {
+  const output = [];
+  const byTitle = new Map();
+
+  for (const item of items) {
+    const key = titleDuplicateKey(item);
+    if (!key) {
+      output.push(item);
+      continue;
+    }
+
+    const existing = byTitle.get(key);
+    if (!existing) {
+      const next = { ...item, sourceCount: 1, alternateSources: [] };
+      byTitle.set(key, next);
+      output.push(next);
+      continue;
+    }
+
+    const duplicate = {
+      title: item.title,
+      image: item.image,
+      url: item.url,
+      source: item.source,
+    };
+    if (!existing.alternateSources.some((alt) => alt.url === duplicate.url)) {
+      existing.alternateSources.push(duplicate);
+      existing.sourceCount = 1 + existing.alternateSources.length;
+    }
+  }
+
+  return output;
+}
+
 function interleaveBySource(items = [], sources = [], limit = 80) {
   const groups = new Map();
   for (const item of items) {
@@ -576,7 +683,7 @@ async function sourceSearch(source, query, filters = {}) {
     });
   });
 
-  return dedupeMangaResults(merged)
+  return filterSafeMangaResults(dedupeMangaResults(merged), filters)
     .sort((a, b) => (a._rank - b._rank) || (a._resultIndex - b._resultIndex))
     .slice(0, 80)
     .map(withoutAggregateMeta);
@@ -602,7 +709,7 @@ async function aggregateLatest(source, page = 1, filters = {}) {
       });
     });
   });
-  const sorted = dedupeMangaResults(merged)
+  const sorted = filterSafeMangaResults(dedupeMangaResults(merged), filters)
     .sort((a, b) => (a._sourceIndex - b._sourceIndex) || (a._resultIndex - b._resultIndex));
   return interleaveBySource(sorted, sources, 80).map(withoutAggregateMeta);
 }
@@ -629,8 +736,9 @@ async function aggregateSearch(source, query, filters = {}) {
       });
     });
   });
-  return dedupeMangaResults(merged)
-    .sort((a, b) => (a._rank - b._rank) || (a._sourceIndex - b._sourceIndex) || (a._resultIndex - b._resultIndex))
+  const ranked = filterSafeMangaResults(dedupeMangaResults(merged), filters)
+    .sort((a, b) => (a._rank - b._rank) || (a._sourceIndex - b._sourceIndex) || (a._resultIndex - b._resultIndex));
+  return mergeDuplicateTitles(ranked)
     .slice(0, 80)
     .map(withoutAggregateMeta);
 }
@@ -725,6 +833,18 @@ function cleanImageAttr(value) {
   return String(value || "").trim();
 }
 
+function styleImageUrls(value) {
+  const urls = [];
+  const style = String(value || "");
+  const regex = /url\((['"]?)(.*?)\1\)/gi;
+  let match;
+  while ((match = regex.exec(style))) {
+    const url = cleanImageAttr(match[2]);
+    if (url) urls.push(url);
+  }
+  return urls;
+}
+
 function srcsetCandidates(srcset) {
   return String(srcset || "")
     .split(",")
@@ -754,6 +874,9 @@ function imgAttr($, el) {
     $el.attr("data-original"),
     $el.attr("data-original-src"),
     $el.attr("data-image"),
+    $el.attr("data-bg"),
+    $el.attr("data-background"),
+    $el.attr("data-background-image"),
   ].map(cleanImageAttr).find(Boolean);
   if (preferredDirect) return preferredDirect;
 
@@ -761,6 +884,7 @@ function imgAttr($, el) {
   if (bestResponsive) return bestResponsive;
 
   return [
+    ...styleImageUrls($el.attr("style")),
     $el.attr("data-src"),
     $el.attr("data-lazy-src"),
     $el.attr("data-fallback"),
@@ -781,13 +905,37 @@ function isLikelyNonCoverImage(value) {
   );
 }
 
+function isLikelyAdImage(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (!text) return false;
+  return /(?:^|[\/_.-])(?:ads?|advert|advertisement|adserver|adservice|banner|casino|slot|jud[io]l?|judi|togel|poker|bet(?:ting)?|sportsbook|jackpot|gacor|maxwin|deposit|bonus|pragmatic|pgsoft|sponsor|promo)(?:[\/_.-]|$)/i.test(text);
+}
+
+function elementLooksLikeAd($, el, imageUrl = "") {
+  const $el = $(el);
+  const signal = [
+    imageUrl,
+    $el.attr("alt"),
+    $el.attr("title"),
+    $el.attr("class"),
+    $el.attr("id"),
+    $el.attr("data-src"),
+    $el.attr("src"),
+  ].filter(Boolean).join(" ");
+  return isLikelyAdImage(signal);
+}
+
 function imageCandidates($, el) {
   const $el = $(el);
   const candidates = [
     $el.attr("data-original"),
     $el.attr("data-original-src"),
     $el.attr("data-image"),
+    $el.attr("data-bg"),
+    $el.attr("data-background"),
+    $el.attr("data-background-image"),
     bestSrcsetImage($el.attr("data-srcset"), $el.attr("srcset")),
+    ...styleImageUrls($el.attr("style")),
     $el.attr("data-src"),
     $el.attr("data-lazy-src"),
     $el.attr("data-fallback"),
@@ -832,8 +980,9 @@ function normalizeChapterImages(images = [], chapterUrl) {
   return absoluteImages.filter((image) => {
     const lower = image.toLowerCase();
     if (isLikelyNonCoverImage(lower)) return false;
+    if (isLikelyAdImage(lower)) return false;
     if (hasNonGifPage && /\.gif(?:[?#].*)?$/i.test(lower)) return false;
-    return !/(?:^|[\/_.-])(?:ads?|advert|adserver|adservice|banner|casino|slot|jackpot|sponsor|promo)(?:[\/_.-]|$)/.test(lower);
+    return true;
   });
 }
 
@@ -867,7 +1016,7 @@ function findChapterImages($, chapterUrl) {
         if (m) u = m[1];
       }
       
-      if (u && !images.includes(u)) images.push(u);
+      if (u && !elementLooksLikeAd($, el, u) && !images.includes(u)) images.push(u);
     });
     if (images.length > 5) break; 
   }
@@ -878,7 +1027,11 @@ function findChapterImages($, chapterUrl) {
       const u = imgAttr($, el);
       const alt = ($(el).attr("alt") || "").toLowerCase();
       const cls = ($(el).attr("class") || "").toLowerCase();
-      if (u && (alt.includes("chapter") || alt.includes("page") || alt.includes("halaman") || cls.includes("wp-image"))) {
+      if (
+        u &&
+        !elementLooksLikeAd($, el, u) &&
+        (alt.includes("chapter") || alt.includes("page") || alt.includes("halaman") || cls.includes("wp-image"))
+      ) {
         if (!images.includes(u)) images.push(u);
       }
     });
@@ -891,7 +1044,11 @@ function findChapterImages($, chapterUrl) {
     const matches = htmlText.match(imgRegex);
     if (matches) {
       const filtered = matches.filter(u => 
-        !u.includes("avatar") && !u.includes("icon") && !u.includes("logo") && !u.includes("banner")
+        !u.includes("avatar") &&
+        !u.includes("icon") &&
+        !u.includes("logo") &&
+        !u.includes("banner") &&
+        !isLikelyAdImage(u)
       );
       images.push(...filtered);
     }
@@ -1433,7 +1590,7 @@ async function mdLatest(lang, page = 1, filters = {}) {
       title: titles.en || Object.values(titles)[0] || "Unknown",
       url: m.id,
       image: fileName
-        ? `https://uploads.mangadex.org/covers/${m.id}/${fileName}.256.jpg`
+        ? `https://uploads.mangadex.org/covers/${m.id}/${fileName}.512.jpg`
         : "",
       source: src,
     };
@@ -1457,7 +1614,7 @@ async function mdSearch(lang, query, filters = {}) {
       title: titles.en || Object.values(titles)[0] || "Unknown",
       url: m.id,
       image: fileName
-        ? `https://uploads.mangadex.org/covers/${m.id}/${fileName}.256.jpg`
+        ? `https://uploads.mangadex.org/covers/${m.id}/${fileName}.512.jpg`
         : "",
       source: src,
     };
@@ -2060,8 +2217,14 @@ function dispatchImages(source, chapterUrl) {
 }
 
 export const Scraper = {
-  fetchLatest: (source, page = 1, filters = {}) => dispatchLatest(source, page, filters),
-  fetchSearch: (source, query, filters = {}) => dispatchSearch(source, query, filters),
+  fetchLatest: async (source, page = 1, filters = {}) => {
+    const items = await dispatchLatest(source, page, filters);
+    return Array.isArray(items) ? filterSafeMangaResults(items, filters) : [];
+  },
+  fetchSearch: async (source, query, filters = {}) => {
+    const items = await dispatchSearch(source, query, filters);
+    return Array.isArray(items) ? filterSafeMangaResults(items, filters) : [];
+  },
   fetchDetails: (source, url) => dispatchDetails(source, url),
   fetchImages: async (source, chapterUrl) => {
     const imgs = await dispatchImages(source, chapterUrl);

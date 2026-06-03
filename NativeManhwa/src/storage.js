@@ -99,8 +99,10 @@ function safeObject(val) {
 const DEFAULT_SETTINGS = {
   autoAdvance: false,
   cacheEnabled: true,
-  imageQuality: 'sharp',
+  imageQuality: 'full',
+  panelSpacing: 'none',
   readerMode: 'webtoon',
+  safeMode: true,
   theme: 'dark',
 };
 
@@ -130,11 +132,17 @@ function normalizeHistory(item) {
 }
 
 function normalizeSettings(settings) {
+  const imageQuality = ['full', 'sharp', 'original'].includes(settings?.imageQuality)
+    ? settings.imageQuality
+    : DEFAULT_SETTINGS.imageQuality;
+
   return {
     autoAdvance: settings?.autoAdvance === true,
     cacheEnabled: settings?.cacheEnabled !== false,
-    imageQuality: settings?.imageQuality === 'full' ? 'full' : 'sharp',
+    imageQuality,
+    panelSpacing: settings?.panelSpacing === 'comfortable' ? 'comfortable' : 'none',
     readerMode: settings?.readerMode === 'manga' ? 'manga' : 'webtoon',
+    safeMode: settings?.safeMode !== false,
     theme: typeof settings?.theme === 'string' ? settings.theme : DEFAULT_SETTINGS.theme,
   };
 }

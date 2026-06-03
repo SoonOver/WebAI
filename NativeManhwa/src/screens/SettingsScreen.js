@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   ScrollView,
   Alert,
+  ActivityIndicator,
   StyleSheet,
   Platform,
 } from 'react-native';
@@ -23,25 +24,72 @@ import {
   getAppUpdateInfo,
   reloadAppUpdate,
 } from '../services/appUpdates';
+import {
+  getProviderHealth,
+  scanProviderHealth,
+  summarizeProviderHealth,
+  isProviderHealthStale,
+} from '../services/providerHealth';
 
 const APP_VERSION = '1.1.2';
 const CACHE_DIR = FileSystem.cacheDirectory
   ? `${FileSystem.cacheDirectory}imgcache/`
   : null;
 const CACHE_AVAILABLE = Platform.OS !== 'web';
+const QUALITY_OPTIONS = [
+  {
+    key: 'full',
+    label: 'Full',
+    icon: 'expand',
+    description: 'Fits webtoon panels to screen width and removes side gutters',
+  },
+  {
+    key: 'sharp',
+    label: 'Sharp',
+    icon: 'scan',
+    description: 'Limits upscaling when a provider only gives low-resolution panels',
+  },
+  {
+    key: 'original',
+    label: 'Original',
+    icon: 'contract',
+    description: 'Keeps original panel width even if side gutters appear',
+  },
+];
+
+function qualityOption(key) {
+  return QUALITY_OPTIONS.find((item) => item.key === key) || QUALITY_OPTIONS[0];
+}
+
+function nextQualityKey(key) {
+  const index = QUALITY_OPTIONS.findIndex((item) => item.key === key);
+  return QUALITY_OPTIONS[(index + 1) % QUALITY_OPTIONS.length].key;
+}
+
+function formatCheckedAt(value) {
+  if (!value) return 'Never';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Never';
+  return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
 
 export default function SettingsScreen() {
   const [settings, setSettings] = useState({
     autoAdvance: false,
     cacheEnabled: true,
-    imageQuality: 'sharp',
+    imageQuality: 'full',
+    panelSpacing: 'none',
     readerMode: 'webtoon',
+    safeMode: true,
     theme: 'dark',
   });
   const [cacheInfo, setCacheInfo] = useState({ exists: false, count: 0 });
   const [historyCount, setHistoryCount] = useState(0);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateInfo, setUpdateInfo] = useState(() => getAppUpdateInfo());
+  const [providerHealth, setProviderHealth] = useState([]);
+  const [scanningProviderHealth, setScanningProviderHealth] = useState(false);
+  const [scanProgress, setScanProgress] = useState(null);
 
   const loadSettings = useCallback(async () => {
     try {
@@ -79,13 +127,19 @@ export default function SettingsScreen() {
     }
   }, []);
 
+  const loadProviderHealth = useCallback(async () => {
+    const health = await getProviderHealth();
+    setProviderHealth(health);
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       loadSettings();
       checkCacheStatus();
       loadHistoryCount();
+      loadProviderHealth();
       setUpdateInfo(getAppUpdateInfo());
-    }, [loadSettings, checkCacheStatus, loadHistoryCount])
+    }, [loadSettings, checkCacheStatus, loadHistoryCount, loadProviderHealth])
   );
 
   const updateSetting = async (key, value) => {
@@ -184,6 +238,23 @@ export default function SettingsScreen() {
     }
   };
 
+  const handleScanProviders = async () => {
+    if (scanningProviderHealth) return;
+    setScanningProviderHealth(true);
+    setScanProgress(null);
+    try {
+      const health = await scanProviderHealth((progress) => {
+        setScanProgress(progress);
+      });
+      setProviderHealth(health);
+    } catch {
+      Alert.alert('Provider health', 'Failed to scan providers right now.');
+    } finally {
+      setScanningProviderHealth(false);
+      setScanProgress(null);
+    }
+  };
+
   const cacheStatusLabel = () => {
     if (!CACHE_AVAILABLE) return 'Native only';
     if (!cacheInfo.exists) return 'Empty';
@@ -199,12 +270,104 @@ export default function SettingsScreen() {
   const updateStatusLabel = updateInfo.enabled
     ? `${updateInfo.isEmbeddedLaunch ? 'Embedded build' : 'OTA update'} · ${updateInfo.updateId}`
     : 'Unavailable in Expo Go or web preview';
+  const selectedQuality = qualityOption(settings.imageQuality);
+  const providerSummary = summarizeProviderHealth(providerHealth);
+  const providerHealthStale = isProviderHealthStale(providerHealth);
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <ScreenHeader title="Settings" subtitle="App preferences" />
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
+        {/* ── Discovery ── */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Discovery</Text>
+
+          <View style={styles.row}>
+            <View style={styles.rowLeft}>
+              <View style={styles.iconWrap}>
+                <Ionicons
+                  name="shield-checkmark-outline"
+                  size={20}
+                  color={settings.safeMode ? THEME.success : THEME.warning}
+                />
+              </View>
+              <View style={styles.rowText}>
+                <Text style={styles.rowLabel}>Safe mode</Text>
+                <Text style={styles.rowDescription}>
+                  Hides adult titles from catalog, search, and quick picks
+                </Text>
+              </View>
+            </View>
+            <Switch
+              value={settings.safeMode}
+              onValueChange={(v) => updateSetting('safeMode', v)}
+              trackColor={{ false: THEME.border, true: THEME.primaryDark }}
+              thumbColor={settings.safeMode ? THEME.primary : THEME.textMuted}
+            />
+          </View>
+
+          <View style={styles.row}>
+            <View style={styles.rowLeft}>
+              <View style={styles.iconWrap}>
+                <Ionicons
+                  name="pulse-outline"
+                  size={20}
+                  color={providerHealthStale ? THEME.warning : THEME.primary}
+                />
+              </View>
+              <View style={styles.rowText}>
+                <Text style={styles.rowLabel}>Provider health</Text>
+                <Text style={styles.rowDescription}>
+                  {providerSummary}{providerHealthStale ? ' · scan recommended' : ''}
+                </Text>
+                {scanProgress?.source ? (
+                  <Text style={styles.rowDescription}>
+                    Checking {scanProgress.source} ({scanProgress.index + 1}/{scanProgress.total})
+                  </Text>
+                ) : null}
+              </View>
+            </View>
+            <TouchableOpacity
+              style={[styles.updateBtn, scanningProviderHealth && styles.updateBtnDisabled]}
+              onPress={handleScanProviders}
+              disabled={scanningProviderHealth}
+              activeOpacity={0.7}
+            >
+              {scanningProviderHealth ? (
+                <ActivityIndicator size="small" color={THEME.textMuted} />
+              ) : (
+                <Text style={styles.updateBtnText}>Scan</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+
+          {providerHealth.length > 0 ? (
+            <View style={styles.providerGrid}>
+              {providerHealth.map((entry) => (
+                <View key={entry.source} style={styles.providerHealthRow}>
+                  <View
+                    style={[
+                      styles.providerStatusDot,
+                      entry.status === 'ok' && styles.providerStatusOk,
+                      entry.status === 'degraded' && styles.providerStatusDegraded,
+                      entry.status === 'down' && styles.providerStatusDown,
+                    ]}
+                  />
+                  <View style={styles.providerHealthText}>
+                    <Text style={styles.providerHealthName} numberOfLines={1}>
+                      {entry.label}
+                    </Text>
+                    <Text style={styles.providerHealthMeta} numberOfLines={2}>
+                      {entry.message} · {entry.latencyMs}ms · {formatCheckedAt(entry.checkedAt)}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          ) : null}
+        </View>
+
         {/* ── Reading ── */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Reading</Text>
@@ -282,9 +445,7 @@ export default function SettingsScreen() {
               <View style={styles.rowText}>
                 <Text style={styles.rowLabel}>Image quality</Text>
                 <Text style={styles.rowDescription}>
-                  {settings.imageQuality === 'sharp'
-                    ? 'Keeps low-res panels sharper and avoids black side gutters'
-                    : 'Stretches every panel to full screen width'}
+                  {selectedQuality.description}
                 </Text>
               </View>
             </View>
@@ -293,18 +454,57 @@ export default function SettingsScreen() {
               onPress={() =>
                 updateSetting(
                   'imageQuality',
-                  settings.imageQuality === 'sharp' ? 'full' : 'sharp',
+                  nextQualityKey(settings.imageQuality),
                 )
               }
               activeOpacity={0.75}
             >
               <Ionicons
-                name={settings.imageQuality === 'sharp' ? 'scan' : 'expand'}
+                name={selectedQuality.icon}
                 size={16}
                 color={THEME.text}
               />
               <Text style={styles.modeBtnText}>
-                {settings.imageQuality === 'sharp' ? 'Adaptive' : 'Full'}
+                {selectedQuality.label}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.row}>
+            <View style={styles.rowLeft}>
+              <View style={styles.iconWrap}>
+                <Ionicons
+                  name="reorder-three-outline"
+                  size={20}
+                  color={THEME.primary}
+                />
+              </View>
+              <View style={styles.rowText}>
+                <Text style={styles.rowLabel}>Panel spacing</Text>
+                <Text style={styles.rowDescription}>
+                  {settings.panelSpacing === 'comfortable'
+                    ? 'Adds a small gap between webtoon panels'
+                    : 'Keeps webtoon panels tightly connected'}
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              style={styles.modeBtn}
+              onPress={() =>
+                updateSetting(
+                  'panelSpacing',
+                  settings.panelSpacing === 'comfortable' ? 'none' : 'comfortable',
+                )
+              }
+              activeOpacity={0.75}
+            >
+              <Ionicons
+                name={settings.panelSpacing === 'comfortable' ? 'remove-outline' : 'add-outline'}
+                size={16}
+                color={THEME.text}
+              />
+              <Text style={styles.modeBtnText}>
+                {settings.panelSpacing === 'comfortable' ? 'Gap' : 'Tight'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -631,6 +831,52 @@ const styles = StyleSheet.create({
   },
   updateBtnTextDisabled: {
     color: THEME.textMuted,
+  },
+  providerGrid: {
+    backgroundColor: THEME.surface,
+    borderRadius: THEME.radius.md,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    overflow: 'hidden',
+  },
+  providerHealthRow: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: THEME.space.sm,
+    paddingHorizontal: THEME.space.md,
+    borderBottomWidth: 1,
+    borderBottomColor: THEME.border,
+  },
+  providerStatusDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: THEME.textMuted,
+    marginRight: THEME.space.md,
+  },
+  providerStatusOk: {
+    backgroundColor: THEME.success,
+  },
+  providerStatusDegraded: {
+    backgroundColor: THEME.warning,
+  },
+  providerStatusDown: {
+    backgroundColor: THEME.danger,
+  },
+  providerHealthText: {
+    flex: 1,
+  },
+  providerHealthName: {
+    color: THEME.text,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  providerHealthMeta: {
+    color: THEME.textMuted,
+    fontSize: 11,
+    lineHeight: 15,
+    marginTop: 2,
   },
   bottomSpacer: {
     height: THEME.space.xl * 4,
