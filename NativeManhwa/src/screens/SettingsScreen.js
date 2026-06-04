@@ -55,7 +55,7 @@ const QUALITY_OPTIONS = [
     key: 'full',
     label: 'Full',
     icon: 'expand',
-    description: 'Fits webtoon panels to screen width and removes side gutters',
+    description: 'Fills the screen and uses smart edge fill when a source panel is soft',
   },
   {
     key: 'sharp',

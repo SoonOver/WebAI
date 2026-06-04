@@ -30,15 +30,23 @@ function imageHeaders(referer, imageUri) {
   return headers;
 }
 
+const DEVICE_PIXEL_RATIO = Math.max(1, PixelRatio.get());
 const PROTECTED_IMAGE_CACHE_DIR = FileSystem.cacheDirectory
   ? `${FileSystem.cacheDirectory}imgcache/protected-images/`
   : null;
 const protectedImageDownloads = new Map();
 const HIGH_QUALITY_IMAGE_PROPS = Platform.OS === 'android'
-  ? { resizeMethod: 'scale', progressiveRenderingEnabled: false, fadeDuration: 0 }
+  ? {
+      resizeMethod: 'resize',
+      resizeMultiplier: Math.min(2, DEVICE_PIXEL_RATIO),
+      progressiveRenderingEnabled: false,
+      fadeDuration: 0,
+    }
   : {};
-const DEVICE_PIXEL_RATIO = Math.max(1, PixelRatio.get());
 const SHARP_MAX_UPSCALE = 1.35;
+const FULLSCREEN_SOFT_SOURCE_THRESHOLD = 0.94;
+const FULLSCREEN_EDGE_FILL_MIN_RATIO = 0.8;
+const FULLSCREEN_EDGE_FILL_UPSCALE = 1.12;
 const IMAGE_DIMENSION_RANGE = 'bytes=0-65535';
 const LOCAL_IMAGE_PROBE_LENGTH = 65536;
 const GRID_MIN_CARD_WIDTH = 148;
@@ -467,6 +475,46 @@ export function AutoHeightImage({
   }
   if (!imageUri || failed) {
     return <ImageFallback height={300} width={width} onRetry={imageUri ? retryImage : undefined} />;
+  }
+  const targetPhysicalWidth = width * DEVICE_PIXEL_RATIO;
+  const isSoftFullscreenSource =
+    fit === 'width' &&
+    hasNaturalSize &&
+    measuredSize.width < targetPhysicalWidth * FULLSCREEN_SOFT_SOURCE_THRESHOLD;
+  if (isSoftFullscreenSource) {
+    const sharpFillWidth = Math.min(
+      width,
+      Math.max(
+        width * FULLSCREEN_EDGE_FILL_MIN_RATIO,
+        (measuredSize.width * FULLSCREEN_EDGE_FILL_UPSCALE) / DEVICE_PIXEL_RATIO,
+      ),
+    );
+    const sharpFillHeight = measuredSize.height * (sharpFillWidth / measuredSize.width);
+    return (
+      <View style={[styles.autoImageFrame, styles.smartFillFrame, { width, height: sharpFillHeight }]}>
+        <FadeInImage
+          imageKey={`${imageUri}:edge:${retryVersion}`}
+          source={resolvedImageSource}
+          style={[
+            StyleSheet.absoluteFillObject,
+            styles.smartFillBackground,
+            { width, height: sharpFillHeight },
+          ]}
+          resizeMode="cover"
+          blurRadius={Platform.OS === 'web' ? 0 : 12}
+          {...HIGH_QUALITY_IMAGE_PROPS}
+          onError={() => setFailed(true)}
+        />
+        <FadeInImage
+          imageKey={`${imageUri}:sharp:${retryVersion}`}
+          source={resolvedImageSource}
+          style={{ width: sharpFillWidth, height: sharpFillHeight }}
+          resizeMode="contain"
+          {...HIGH_QUALITY_IMAGE_PROPS}
+          onError={() => setFailed(true)}
+        />
+      </View>
+    );
   }
   return (
     <View style={[styles.autoImageFrame, { width }]}>
@@ -1069,6 +1117,14 @@ const styles = StyleSheet.create({
   autoImageFrame: {
     backgroundColor: '#05070A',
     alignItems: 'center',
+  },
+  smartFillFrame: {
+    overflow: 'hidden',
+    justifyContent: 'flex-start',
+  },
+  smartFillBackground: {
+    opacity: 0.34,
+    transform: [{ scale: 1.08 }],
   },
   sourceBadge: {
     position: 'absolute',
