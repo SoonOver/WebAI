@@ -403,6 +403,18 @@ const ADULT_TITLE_PATTERNS = [
   /\bseduction\b/i,
   /\baffair\b/i,
   /\bmistress\b/i,
+  /\bstepmother\b/i,
+  /\bmother'?s?\s+friends?\b/i,
+  /\blandlord\s+sisters?\b/i,
+  /\bchildhood\s+friend\s+complex\b/i,
+  /\bsecret\s+class\b/i,
+  /\bthe\s+hole\s+is\s+open\b/i,
+  /\ba\s+cheap\s+romance\b/i,
+  /\bthe\s+toy\s+of\b/i,
+  /\bbaseball\s+players?\b/i,
+  /\broom\s+salon\b/i,
+  /\bmassage\b/i,
+  /\bsugar\s+(?:baby|mommy|daddy)\b/i,
   /\bconcubine\b/i,
   /\baphrodisiac\b/i,
   /\bharem\b/i,
@@ -731,7 +743,32 @@ async function aggregateLatest(source, page = 1, filters = {}) {
   });
   const sorted = filterSafeMangaResults(dedupeMangaResults(merged), filters)
     .sort((a, b) => (a._sourceIndex - b._sourceIndex) || (a._resultIndex - b._resultIndex));
-  return interleaveBySource(sorted, sources, 80).map(withoutAggregateMeta);
+  return mergeDuplicateTitles(interleaveBySource(sorted, sources, 80).map(withoutAggregateMeta));
+}
+
+async function aggregateTrending(source, page = 1, filters = {}) {
+  const sources = aggregateSourcesFor(source, filters);
+  if (sources.length === 0) return [];
+  const settled = await Promise.allSettled(
+    sources.map((sourceKey) => dispatchTrending(sourceKey, page, filters))
+  );
+  const merged = [];
+  settled.forEach((result, sourceIndex) => {
+    if (result.status !== "fulfilled" || !Array.isArray(result.value)) return;
+    const sourceKey = sources[sourceIndex];
+    result.value.forEach((item, resultIndex) => {
+      if (!item?.url) return;
+      merged.push({
+        ...item,
+        source: item.source || sourceKey,
+        _sourceIndex: sourceIndex,
+        _resultIndex: resultIndex,
+      });
+    });
+  });
+  const sorted = filterSafeMangaResults(dedupeMangaResults(merged), filters)
+    .sort((a, b) => (a._sourceIndex - b._sourceIndex) || (a._resultIndex - b._resultIndex));
+  return mergeDuplicateTitles(interleaveBySource(sorted, sources, 80).map(withoutAggregateMeta));
 }
 
 async function aggregateSearch(source, query, filters = {}) {
@@ -1135,6 +1172,65 @@ async function komikuLatest(page = 1) {
   });
 }
 
+function parseKomikuBgeListing(html, base) {
+  const results = [];
+  const chunks = String(html || "").split(/<div\s+class=["']bge["']\s*>/i).slice(1);
+
+  if (chunks.length > 0) {
+    for (const chunk of chunks) {
+      const $chunk = loadHtml(`<div class="bge">${chunk}`);
+      const title = cleanMangaTitle(
+        $chunk(".kan h3").first().text() ||
+        $chunk("h3").first().text() ||
+        $chunk(".bgei img").first().attr("alt")
+      );
+      const url =
+        $chunk(".kan a").first().attr("href") ||
+        $chunk(".bgei a").first().attr("href") ||
+        $chunk("a").first().attr("href");
+      const image = firstUsableCoverImage($chunk, $chunk(".bgei, .bge").first(), base);
+      if (title && url) {
+        results.push({
+          title,
+          image: absUrl(base, image),
+          url: absUrl(base, url),
+          source: "Komiku",
+        });
+      }
+    }
+    return dedupeMangaResults(results);
+  }
+
+  const $ = loadHtml(html);
+  $(".bge").each((_, el) => {
+    const $el = $(el);
+    const a = $el.find("h3 a, .kan a, .bgei a, a").first();
+    const title = cleanMangaTitle(
+      $el.find("h3").first().text() ||
+      a.text() ||
+      $el.find("img").first().attr("alt")
+    );
+    const url = a.attr("href");
+    const image = firstUsableCoverImage($, el, base);
+    if (title && url) {
+      results.push({
+        title,
+        image: absUrl(base, image),
+        url: absUrl(base, url),
+        source: "Komiku",
+      });
+    }
+  });
+  return dedupeMangaResults(results);
+}
+
+async function komikuTrending() {
+  const res = await safeFetch("https://api.komiku.org/manga/?orderby=meta_value_num", {
+    headers: HEADERS,
+  });
+  return parseKomikuBgeListing(await res.text(), "https://komiku.org");
+}
+
 async function komikuSearch(query) {
   const { html, base } = await komikuTryDomains(
     `/?post_type=manga&s=${encodeURIComponent(query)}`,
@@ -1248,6 +1344,31 @@ async function komikindoLatest() {
       });
   });
   return results;
+}
+
+async function komikindoTrending(page = 1) {
+  const path = page > 1 ? `/komik-populer/page/${page}/` : "/komik-populer/";
+  const { html, base } = await komikindoTryDomains(path);
+  const $ = loadHtml(html);
+  const results = [];
+  $(".animepost").each((_, el) => {
+    const title = cleanMangaTitle(
+      $(el).find(".tt h3 a").text().trim() ||
+      $(el).find(".tt h4").text().trim() ||
+      $(el).find("a").first().attr("title")
+    );
+    const url =
+      $(el).find(".tt h3 a").attr("href") || $(el).find("a").attr("href");
+    const image = firstUsableCoverImage($, el, base);
+    if (title && url)
+      results.push({
+        title,
+        image: absUrl(base, image),
+        url: absUrl(base, url),
+        source: "Komikindo",
+      });
+  });
+  return dedupeMangaResults(results);
 }
 
 async function komikindoSearch(query) {
@@ -1815,6 +1936,11 @@ async function batoLatest(page = 1) {
   return batoFilterReadableResults(batoParseBrowse(html, "Bato.to (ID)", base), base);
 }
 
+async function batoTrending() {
+  const { html, base } = await batoTryDomains("/");
+  return batoFilterReadableResults(batoParseBrowse(html, "Bato.to (ID)", base), base);
+}
+
 async function batoSearch(query) {
   const { html, base } = await batoTryDomains(
     `/?s=${encodeURIComponent(query)}`,
@@ -2011,6 +2137,15 @@ async function manhwareadTryDomains(path) {
 async function manhwareadLatest(page = 1) {
   const path = page > 1 ? `/manhwa/page/${page}/` : "/manhwa/";
   const { html, base } = await manhwareadTryDomains(path);
+  return parseManhwaReadListing(html, base);
+}
+
+async function manhwareadTrending() {
+  const { html, base } = await manhwareadTryDomains("/");
+  return parseManhwaReadListing(html, base);
+}
+
+function parseManhwaReadListing(html, base) {
   const $ = loadHtml(html);
   const results = [];
   $(".manga-item").each((_, el) => {
@@ -2031,7 +2166,7 @@ async function manhwareadLatest(page = 1) {
         source: "ManhwaRead",
       });
   });
-  return results;
+  return dedupeMangaResults(results);
 }
 
 async function manhwareadSearch(query) {
@@ -2179,6 +2314,32 @@ function dispatchLatest(source, page = 1, filters = {}) {
   }
 }
 
+function dispatchTrending(source, page = 1, filters = {}) {
+  if (source === ALL_ID_SOURCE) {
+    return aggregateTrending(source, page, filters);
+  }
+  switch (source) {
+    case "Komikindo":
+      return komikindoTrending(page);
+    case "BacaKomik":
+      return bacakomikLatest(page, { ...filters, sort: "popular" });
+    case "Komik Station":
+      return mtLatest(source, page, { ...filters, sort: "popular" });
+    case "Komiku":
+      return komikuTrending(page);
+    case "ManhwaRead":
+      return manhwareadTrending(page);
+    case "MangaDex (JSON API)":
+      return mdLatest("en", page, { ...filters, sort: "popular" });
+    case "MangaDex (Bahasa Indonesia)":
+      return mdLatest("id", page, { ...filters, sort: "popular" });
+    case "Bato.to (ID)":
+      return batoTrending(page);
+    default:
+      return dispatchLatest(source, page, filters);
+  }
+}
+
 function dispatchSearch(source, query, filters = {}) {
   if (source === ALL_ID_SOURCE) {
     return aggregateSearch(source, query, filters);
@@ -2239,6 +2400,10 @@ function dispatchImages(source, chapterUrl) {
 export const Scraper = {
   fetchLatest: async (source, page = 1, filters = {}) => {
     const items = await dispatchLatest(source, page, filters);
+    return Array.isArray(items) ? filterSafeMangaResults(items, filters) : [];
+  },
+  fetchTrending: async (source, page = 1, filters = {}) => {
+    const items = await dispatchTrending(source, page, filters);
     return Array.isArray(items) ? filterSafeMangaResults(items, filters) : [];
   },
   fetchSearch: async (source, query, filters = {}) => {

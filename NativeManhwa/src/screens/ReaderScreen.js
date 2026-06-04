@@ -55,7 +55,7 @@ export default function ReaderScreen({ route, navigation }) {
     ? Math.min(parsedIndex, Math.max(chapters.length - 1, 0))
     : 0;
   const insets = useSafeAreaInsets();
-  const { width: screenWidth } = useWindowDimensions();
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const [images, setImages] = useState([]);
   const [imageMetrics, setImageMetrics] = useState({});
   const [loading, setLoading] = useState(true);
@@ -76,6 +76,11 @@ export default function ReaderScreen({ route, navigation }) {
   const changingChapterRef = useRef(false);
   const loadGenRef = useRef(0);
   const listRef = useRef(null);
+  const userScrolledRef = useRef(false);
+  const autoAdvanceGateTriggeredRef = useRef(false);
+  const autoAdvanceEnabledRef = useRef(false);
+  const canGoNextRef = useRef(false);
+  const goNextChapterRef = useRef(() => {});
 
   // Load settings on mount and whenever screen is focused
   useFocusEffect(
@@ -97,6 +102,8 @@ export default function ReaderScreen({ route, navigation }) {
     setLoading(true);
     setErrorMessage('');
     setImageMetrics({});
+    userScrolledRef.current = false;
+    autoAdvanceGateTriggeredRef.current = false;
     try {
       if (!targetUrl) {
         throw new Error('Missing chapter URL');
@@ -115,13 +122,7 @@ export default function ReaderScreen({ route, navigation }) {
           setImages(remote);
           Promise.allSettled(
             remote.map(img => DownloadManager.cacheImage(img, targetUrl))
-          ).then((cachedResults) => {
-            if (loadGenRef.current !== currentGen) return;
-            const finalImages = cachedResults.map((r, i) =>
-              r.status === 'fulfilled' && r.value ? r.value : remote[i]
-            );
-            setImages(finalImages);
-          });
+          ).catch(() => {});
         } else {
           if (loadGenRef.current !== currentGen) return;
           setImages(remote || []);
@@ -180,8 +181,11 @@ export default function ReaderScreen({ route, navigation }) {
       .filter((width) => Number.isFinite(width) && width > 0),
     [imageMetrics],
   );
-  const sourceWidthLabel = measuredImageWidths.length > 0
-    ? `${Math.min(...measuredImageWidths)}px source`
+  const minSourceWidth = measuredImageWidths.length > 0
+    ? Math.min(...measuredImageWidths)
+    : 0;
+  const sourceWidthLabel = minSourceWidth > 0
+    ? `${minSourceWidth}px ${minSourceWidth < 720 ? 'low source' : minSourceWidth < 900 ? 'soft source' : 'source'}`
     : '';
   const baseReaderProgress = chapters.length > 0
     ? `${currentIndex + 1} / ${chapters.length}${images.length > 0 ? ` · ${pageCountLabel}` : ''}`
@@ -190,6 +194,21 @@ export default function ReaderScreen({ route, navigation }) {
     ? `${baseReaderProgress} · ${sourceWidthLabel}`
     : baseReaderProgress;
   const readerToolsEnabled = isFeatureEnabled(moduleState, MODULE_FEATURES.readerFloatingTools);
+  const readerItems = useMemo(() => {
+    const pageItems = images.map((uri, index) => ({
+      type: 'image',
+      uri,
+      index,
+      key: `image-${index}`,
+    }));
+    if (settings.autoAdvance && canGoNext) {
+      pageItems.push({
+        type: 'next',
+        key: 'next-chapter-gate',
+      });
+    }
+    return pageItems;
+  }, [canGoNext, images, settings.autoAdvance]);
 
   const toggleReaderMode = useCallback(async () => {
     const nextMode = mode === 'webtoon' ? 'manga' : 'webtoon';
@@ -277,6 +296,38 @@ export default function ReaderScreen({ route, navigation }) {
       navigation.setParams({ url: nxt.url, title: nxt.name, currentIndex: currentIndex + 1 });
     }
   };
+
+  goNextChapterRef.current = goNextChapter;
+  autoAdvanceEnabledRef.current = settings.autoAdvance === true;
+  canGoNextRef.current = canGoNext && !changingChapter;
+
+  useEffect(() => {
+    userScrolledRef.current = false;
+    autoAdvanceGateTriggeredRef.current = false;
+  }, [url, currentIndex, settings.autoAdvance]);
+
+  const viewabilityConfigRef = useRef({
+    itemVisiblePercentThreshold: 80,
+    minimumViewTime: 220,
+  });
+  const onViewableItemsChangedRef = useRef(({ viewableItems }) => {
+    if (autoAdvanceGateTriggeredRef.current) return;
+    if (!userScrolledRef.current) return;
+    if (!autoAdvanceEnabledRef.current || !canGoNextRef.current) return;
+    const gateVisible = viewableItems.some((entry) => entry?.item?.type === 'next');
+    if (!gateVisible) return;
+    autoAdvanceGateTriggeredRef.current = true;
+    goNextChapterRef.current();
+  });
+
+  const handleReaderScroll = useCallback((event) => {
+    const offset = mode === 'manga'
+      ? event?.nativeEvent?.contentOffset?.x
+      : event?.nativeEvent?.contentOffset?.y;
+    if (Math.abs(Number(offset) || 0) > 8) {
+      userScrolledRef.current = true;
+    }
+  }, [mode]);
 
   if (loading) {
     return (
@@ -397,16 +448,18 @@ export default function ReaderScreen({ route, navigation }) {
         <FlatList
           ref={listRef}
           key={mode}
-          data={images}
-          keyExtractor={(_, i) => i.toString()}
+          data={readerItems}
+          keyExtractor={(item) => item.key}
           initialNumToRender={mode === 'webtoon' ? 3 : 1}
           maxToRenderPerBatch={mode === 'webtoon' ? 4 : 2}
           windowSize={mode === 'webtoon' ? 7 : 3}
           removeClippedSubviews={false}
           horizontal={mode === 'manga'}
           pagingEnabled={mode === 'manga'}
-          onEndReached={() => { if (settings.autoAdvance && canGoNext) goNextChapter(); }}
-          onEndReachedThreshold={0.5}
+          onScroll={handleReaderScroll}
+          scrollEventThrottle={64}
+          onViewableItemsChanged={onViewableItemsChangedRef.current}
+          viewabilityConfig={viewabilityConfigRef.current}
           getItemLayout={mode === 'manga' ? (_, index) => ({
             length: screenWidth,
             offset: screenWidth * index,
@@ -417,19 +470,55 @@ export default function ReaderScreen({ route, navigation }) {
               ? { paddingTop: headerPadTop + 58, paddingBottom: insets.bottom + THEME.space.lg }
               : undefined
           }
-          renderItem={({ item, index }) => (
-            <View style={mode === 'webtoon' && settings.panelSpacing === 'comfortable' ? styles.webtoonPanelGap : null}>
-              <AutoHeightImage
-                source={item}
-                referer={url}
-                fit={mode === 'manga' ? 'contain' : 'width'}
-                topInset={mode === 'manga' ? headerPadTop + 58 : 0}
-                bottomInset={mode === 'manga' ? insets.bottom + THEME.space.sm : 0}
-                qualityMode={settings.imageQuality}
-                onSize={(size) => handleImageSize(index, size)}
-              />
-            </View>
-          )}
+          renderItem={({ item }) => {
+            if (item.type === 'next') {
+              return (
+                <View
+                  style={[
+                    mode === 'manga'
+                      ? [styles.nextChapterPage, { width: screenWidth, minHeight: screenHeight, paddingTop: headerPadTop + 58, paddingBottom: insets.bottom + THEME.space.lg }]
+                      : [
+                          styles.nextChapterGate,
+                          {
+                            minHeight: Math.max(360, screenHeight - headerPadTop - 58),
+                            paddingBottom: insets.bottom + THEME.space.xl,
+                          },
+                        ],
+                  ]}
+                >
+                  <View style={styles.nextChapterPanel}>
+                    <Ionicons name="arrow-down-circle-outline" size={32} color={THEME.primary} />
+                    <Text style={styles.nextChapterTitle}>Next chapter ready</Text>
+                    <Text style={styles.nextChapterText}>
+                      Swipe once more after the last panel, or tap here to continue.
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.nextChapterButton}
+                      onPress={goNextChapter}
+                      disabled={!canGoNext || changingChapter}
+                      activeOpacity={0.78}
+                    >
+                      <Ionicons name="play-skip-forward" size={16} color={THEME.text} />
+                      <Text style={styles.nextChapterButtonText}>Next chapter</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              );
+            }
+            return (
+              <View style={mode === 'webtoon' && settings.panelSpacing === 'comfortable' ? styles.webtoonPanelGap : null}>
+                <AutoHeightImage
+                  source={item.uri}
+                  referer={url}
+                  fit={mode === 'manga' ? 'contain' : 'width'}
+                  topInset={mode === 'manga' ? headerPadTop + 58 : 0}
+                  bottomInset={mode === 'manga' ? insets.bottom + THEME.space.sm : 0}
+                  qualityMode={settings.imageQuality}
+                  onSize={(size) => handleImageSize(item.index, size)}
+                />
+              </View>
+            );
+          }}
         />
       )}
       {images.length > 0 && readerToolsEnabled ? (
@@ -559,6 +648,60 @@ const styles = StyleSheet.create({
   },
   webtoonPanelGap: {
     marginBottom: THEME.space.sm,
+  },
+  nextChapterGate: {
+    minHeight: 220,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: THEME.space.lg,
+    paddingTop: THEME.space.xl,
+  },
+  nextChapterPage: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: THEME.space.lg,
+    backgroundColor: '#05070A',
+  },
+  nextChapterPanel: {
+    width: '100%',
+    maxWidth: 360,
+    alignItems: 'center',
+    borderRadius: THEME.radius.md,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    backgroundColor: 'rgba(15,23,42,0.92)',
+    paddingVertical: THEME.space.xl,
+    paddingHorizontal: THEME.space.lg,
+  },
+  nextChapterTitle: {
+    color: THEME.text,
+    fontSize: 17,
+    fontWeight: '800',
+    marginTop: THEME.space.md,
+  },
+  nextChapterText: {
+    color: THEME.textSecondary,
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: 'center',
+    marginTop: THEME.space.sm,
+  },
+  nextChapterButton: {
+    minHeight: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    marginTop: THEME.space.lg,
+    paddingHorizontal: THEME.space.lg,
+    borderRadius: THEME.radius.sm,
+    backgroundColor: THEME.primaryDark,
+    borderWidth: 1,
+    borderColor: THEME.primary,
+  },
+  nextChapterButtonText: {
+    color: THEME.text,
+    fontSize: 13,
+    fontWeight: '800',
   },
   readerFloatingBar: {
     position: 'absolute',

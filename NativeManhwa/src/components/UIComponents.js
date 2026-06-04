@@ -43,6 +43,7 @@ const IMAGE_DIMENSION_RANGE = 'bytes=0-65535';
 const LOCAL_IMAGE_PROBE_LENGTH = 65536;
 const GRID_MIN_CARD_WIDTH = 148;
 const GRID_MAX_CARD_WIDTH = 196;
+const SHELF_CARD_WIDTH = 136;
 
 function protectedImageHash(value) {
   const text = String(value ?? '');
@@ -428,7 +429,9 @@ export function AutoHeightImage({
   const resolvedImageSource = imageSource(imageUri, referer);
   const measuredSize = pixelSize.width > 0 && pixelSize.height > 0 ? pixelSize : naturalSize;
   const hasNaturalSize = measuredSize.width > 0 && measuredSize.height > 0;
-  const displayWidth = nativePixelWidth(width, measuredSize.width, qualityMode);
+  const displayWidth = fit === 'width'
+    ? width
+    : nativePixelWidth(width, measuredSize.width, qualityMode);
   const displayHeight = hasNaturalSize
     ? measuredSize.height * (displayWidth / measuredSize.width)
     : 400;
@@ -542,9 +545,10 @@ export function SourceSegment({ value, onChange }) {
   );
 }
 
-export function CatalogFilters({ source, value, onChange }) {
+export function CatalogFilters({ source, value, onChange, omitKeys = [] }) {
   const [open, setOpen] = useState(false);
-  const groups = getCatalogFilterGroups(source);
+  const omitted = new Set(omitKeys);
+  const groups = getCatalogFilterGroups(source).filter((group) => !omitted.has(group.key));
   if (groups.length === 0) return null;
 
   const filters = sanitizeCatalogFilters(source, value);
@@ -720,6 +724,58 @@ export function MangaCard({ item, onPress, columns }) {
           {title}
         </Text>
       </View>
+    </TouchableOpacity>
+  );
+}
+
+export function MangaShelfCard({ item, onPress, rank }) {
+  const sourceImageUri = typeof item?.image === 'string' ? item.image : '';
+  const itemUrl = typeof item?.url === 'string' ? item.url : '';
+  const imageUri = useProtectedImageUri(sourceImageUri, itemUrl);
+  const title = typeof item?.title === 'string' && item.title.trim() ? item.title.trim() : 'Untitled';
+  const sourceCount = Number(item?.sourceCount) > 1 ? Number(item.sourceCount) : 1;
+  const [imageFailed, setImageFailed] = useState(false);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [imageUri]);
+
+  return (
+    <TouchableOpacity
+      style={styles.shelfCard}
+      activeOpacity={0.88}
+      onPress={onPress}
+    >
+      <View style={styles.shelfImageWrap}>
+        {imageUri && !imageFailed ? (
+          <Image
+            source={imageSource(imageUri, itemUrl)}
+            style={styles.shelfImage}
+            {...HIGH_QUALITY_IMAGE_PROPS}
+            onError={() => setImageFailed(true)}
+          />
+        ) : (
+          <View style={[styles.shelfImage, styles.cardImageFallback]}>
+            <Ionicons name="image-outline" size={24} color={THEME.textMuted} />
+            <Text style={styles.cardImageFallbackText} numberOfLines={3}>
+              {title}
+            </Text>
+          </View>
+        )}
+        {Number.isFinite(rank) ? (
+          <View style={styles.rankBadge}>
+            <Text style={styles.rankBadgeText}>{rank}</Text>
+          </View>
+        ) : null}
+        <View style={styles.sourceBadge}>
+          <Text style={styles.sourceBadgeText}>
+            {sourceShortLabel(item?.source)}{sourceCount > 1 ? ` +${sourceCount - 1}` : ''}
+          </Text>
+        </View>
+      </View>
+      <Text style={styles.shelfTitle} numberOfLines={2}>
+        {title}
+      </Text>
     </TouchableOpacity>
   );
 }
@@ -1026,4 +1082,48 @@ const styles = StyleSheet.create({
   sourceBadgeText: { color: THEME.text, fontSize: 10, fontWeight: '700', letterSpacing: 0 },
   info: { padding: THEME.space.md },
   title: { color: THEME.text, fontSize: 14, fontWeight: '600', lineHeight: 19 },
+  shelfCard: {
+    width: SHELF_CARD_WIDTH,
+    marginRight: THEME.space.md,
+  },
+  shelfImageWrap: {
+    width: SHELF_CARD_WIDTH,
+    aspectRatio: 0.7,
+    borderRadius: THEME.radius.sm,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: THEME.border,
+    backgroundColor: THEME.surface,
+    position: 'relative',
+  },
+  shelfImage: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: THEME.surface,
+  },
+  shelfTitle: {
+    color: THEME.text,
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 16,
+    marginTop: THEME.space.sm,
+  },
+  rankBadge: {
+    position: 'absolute',
+    top: THEME.space.sm,
+    left: THEME.space.sm,
+    minWidth: 24,
+    height: 24,
+    borderRadius: THEME.radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(37,99,235,0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(147,197,253,0.42)',
+  },
+  rankBadgeText: {
+    color: THEME.text,
+    fontSize: 11,
+    fontWeight: '800',
+  },
 });
