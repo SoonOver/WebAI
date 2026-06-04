@@ -58,6 +58,7 @@ export default function ReaderScreen({ route, navigation }) {
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const [images, setImages] = useState([]);
   const [imageMetrics, setImageMetrics] = useState({});
+  const [activePanelIndex, setActivePanelIndex] = useState(0);
   const [loading, setLoading] = useState(true);
   const [mode, setMode] = useState('webtoon');
   const [errorMessage, setErrorMessage] = useState('');
@@ -81,6 +82,11 @@ export default function ReaderScreen({ route, navigation }) {
   const autoAdvanceEnabledRef = useRef(false);
   const canGoNextRef = useRef(false);
   const goNextChapterRef = useRef(() => {});
+  const activePanelIndexRef = useRef(0);
+  const setActivePanelRef = useRef(() => {});
+  const progressSaveTimerRef = useRef(null);
+  const progressSaverRef = useRef(() => {});
+  const restoredProgressKeyRef = useRef('');
 
   // Load settings on mount and whenever screen is focused
   useFocusEffect(
@@ -102,6 +108,8 @@ export default function ReaderScreen({ route, navigation }) {
     setLoading(true);
     setErrorMessage('');
     setImageMetrics({});
+    setActivePanelIndex(0);
+    activePanelIndexRef.current = 0;
     userScrolledRef.current = false;
     autoAdvanceGateTriggeredRef.current = false;
     try {
@@ -187,12 +195,13 @@ export default function ReaderScreen({ route, navigation }) {
   const sourceWidthLabel = minSourceWidth > 0
     ? `${minSourceWidth}px ${minSourceWidth < 720 ? 'low source' : minSourceWidth < 900 ? 'soft source' : 'source'}`
     : '';
-  const baseReaderProgress = chapters.length > 0
-    ? `${currentIndex + 1} / ${chapters.length}${images.length > 0 ? ` · ${pageCountLabel}` : ''}`
+  const chapterPositionLabel = chapters.length > 0 ? `${currentIndex + 1}/${chapters.length}` : '';
+  const panelPositionLabel = images.length > 0
+    ? `P ${Math.min(activePanelIndex + 1, images.length)}/${images.length}`
     : pageCountLabel;
-  const readerProgress = sourceWidthLabel
-    ? `${baseReaderProgress} · ${sourceWidthLabel}`
-    : baseReaderProgress;
+  const readerProgress = [chapterPositionLabel, panelPositionLabel, sourceWidthLabel]
+    .filter(Boolean)
+    .join(' · ');
   const readerToolsEnabled = isFeatureEnabled(moduleState, MODULE_FEATURES.readerFloatingTools);
   const readerItems = useMemo(() => {
     const pageItems = images.map((uri, index) => ({
@@ -238,6 +247,9 @@ export default function ReaderScreen({ route, navigation }) {
     } else {
       listRef.current?.scrollToOffset?.({ offset: 0, animated: true });
     }
+    activePanelIndexRef.current = 0;
+    setActivePanelIndex(0);
+    progressSaverRef.current(0);
   }, [mode]);
 
   const saveReaderHistory = useCallback((chapter) => {
@@ -253,6 +265,57 @@ export default function ReaderScreen({ route, navigation }) {
       chapter.url,
     ).catch(() => {});
   }, [mangaUrl, mangaTitle, mangaImage, mangaSource, title]);
+
+  const saveCurrentProgress = useCallback((panelIndex) => {
+    const currentChapter = chapters[currentIndex] || { url, name: title };
+    const chapterUrl = currentChapter?.url || url;
+    if (!mangaUrl || !chapterUrl || images.length === 0) return;
+    Storage.saveReadingProgress(
+      {
+        url: mangaUrl,
+        title: mangaTitle,
+        image: mangaImage,
+        source: mangaSource,
+      },
+      currentChapter.name || title,
+      chapterUrl,
+      {
+        panelIndex,
+        panelCount: images.length,
+        progress: images.length > 0 ? (panelIndex + 1) / images.length : 0,
+      },
+    ).catch(() => {});
+  }, [chapters, currentIndex, images.length, mangaImage, mangaSource, mangaTitle, mangaUrl, title, url]);
+
+  const scheduleProgressSave = useCallback((panelIndex) => {
+    if (progressSaveTimerRef.current) {
+      clearTimeout(progressSaveTimerRef.current);
+    }
+    progressSaveTimerRef.current = setTimeout(() => {
+      progressSaveTimerRef.current = null;
+      saveCurrentProgress(panelIndex);
+    }, 700);
+  }, [saveCurrentProgress]);
+
+  progressSaverRef.current = scheduleProgressSave;
+
+  const setActivePanel = useCallback((panelIndex) => {
+    const normalizedIndex = Math.max(0, Math.min(Number(panelIndex) || 0, Math.max(images.length - 1, 0)));
+    if (activePanelIndexRef.current === normalizedIndex) return;
+    activePanelIndexRef.current = normalizedIndex;
+    setActivePanelIndex(normalizedIndex);
+    scheduleProgressSave(normalizedIndex);
+  }, [images.length, scheduleProgressSave]);
+
+  setActivePanelRef.current = setActivePanel;
+
+  useEffect(() => () => {
+    if (progressSaveTimerRef.current) {
+      clearTimeout(progressSaveTimerRef.current);
+      progressSaveTimerRef.current = null;
+    }
+    saveCurrentProgress(activePanelIndexRef.current);
+  }, [saveCurrentProgress]);
 
   const handleImageSize = useCallback((index, size) => {
     if (!size?.uri || !size.width || !size.height) return;
@@ -279,6 +342,7 @@ export default function ReaderScreen({ route, navigation }) {
     if (changingChapterRef.current) return;
     if (canGoPrev) {
       const prev = chapters[currentIndex - 1];
+      saveCurrentProgress(activePanelIndexRef.current);
       saveReaderHistory(prev);
       changingChapterRef.current = true;
       setChangingChapter(true);
@@ -290,6 +354,7 @@ export default function ReaderScreen({ route, navigation }) {
     if (changingChapterRef.current) return;
     if (canGoNext) {
       const nxt = chapters[currentIndex + 1];
+      saveCurrentProgress(activePanelIndexRef.current);
       saveReaderHistory(nxt);
       changingChapterRef.current = true;
       setChangingChapter(true);
@@ -307,10 +372,20 @@ export default function ReaderScreen({ route, navigation }) {
   }, [url, currentIndex, settings.autoAdvance]);
 
   const viewabilityConfigRef = useRef({
-    itemVisiblePercentThreshold: 80,
+    viewAreaCoveragePercentThreshold: 55,
     minimumViewTime: 220,
   });
   const onViewableItemsChangedRef = useRef(({ viewableItems }) => {
+    const imageItems = viewableItems
+      .map((entry) => entry?.item)
+      .filter((item) => item?.type === 'image' && Number.isInteger(item.index));
+    if (imageItems.length > 0) {
+      const nextActive = imageItems.reduce((best, item) => (
+        item.index > best.index ? item : best
+      ), imageItems[0]);
+      setActivePanelRef.current(nextActive.index);
+    }
+
     if (autoAdvanceGateTriggeredRef.current) return;
     if (!userScrolledRef.current) return;
     if (!autoAdvanceEnabledRef.current || !canGoNextRef.current) return;
@@ -328,6 +403,56 @@ export default function ReaderScreen({ route, navigation }) {
       userScrolledRef.current = true;
     }
   }, [mode]);
+
+  const scrollToReaderIndex = useCallback((index, animated = true) => {
+    const targetIndex = Math.max(0, Math.min(Number(index) || 0, Math.max(readerItems.length - 1, 0)));
+    if (mode === 'manga') {
+      listRef.current?.scrollToIndex?.({ index: targetIndex, animated });
+      return;
+    }
+    listRef.current?.scrollToIndex?.({ index: targetIndex, animated, viewPosition: 0 });
+  }, [mode, readerItems.length]);
+
+  const handleScrollToIndexFailed = useCallback((info) => {
+    const targetIndex = Math.max(0, Math.min(Number(info?.index) || 0, Math.max(readerItems.length - 1, 0)));
+    const average = Number(info?.averageItemLength) || screenHeight;
+    listRef.current?.scrollToOffset?.({
+      offset: Math.max(0, average * targetIndex),
+      animated: false,
+    });
+    setTimeout(() => {
+      listRef.current?.scrollToIndex?.({
+        index: targetIndex,
+        animated: true,
+        viewPosition: 0,
+      });
+    }, 320);
+  }, [readerItems.length, screenHeight]);
+
+  useEffect(() => {
+    if (loading || images.length === 0 || !mangaUrl || !url) return undefined;
+    const restoreKey = `${mangaUrl}|${url}|${mode}|${images.length}`;
+    if (restoredProgressKeyRef.current === restoreKey) return undefined;
+    restoredProgressKeyRef.current = restoreKey;
+
+    let active = true;
+    Storage.getReadingProgress(mangaUrl, url)
+      .then((progress) => {
+        if (!active || !progress) return;
+        const targetIndex = Math.max(0, Math.min(progress.panelIndex || 0, images.length - 1));
+        if (targetIndex <= 0) return;
+        activePanelIndexRef.current = targetIndex;
+        setActivePanelIndex(targetIndex);
+        setTimeout(() => {
+          if (active) scrollToReaderIndex(targetIndex, false);
+        }, 280);
+      })
+      .catch(() => {});
+
+    return () => {
+      active = false;
+    };
+  }, [images.length, loading, mangaUrl, mode, scrollToReaderIndex, url]);
 
   if (loading) {
     return (
@@ -465,6 +590,7 @@ export default function ReaderScreen({ route, navigation }) {
             offset: screenWidth * index,
             index,
           }) : undefined}
+          onScrollToIndexFailed={handleScrollToIndexFailed}
           contentContainerStyle={
             mode === 'webtoon'
               ? { paddingTop: headerPadTop + 58, paddingBottom: insets.bottom + THEME.space.lg }

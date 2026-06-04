@@ -123,11 +123,40 @@ function normalizeHistory(item) {
   const manga = normalizeManga(item);
   if (!manga) return null;
   const timestamp = Number(item.timestamp);
+  const lastPanelIndex = Number(item.lastPanelIndex);
+  const lastPanelCount = Number(item.lastPanelCount);
+  const lastProgress = Number(item.lastProgress);
+  const progressUpdatedAt = Number(item.progressUpdatedAt);
   return {
     ...manga,
     lastChapter: typeof item.lastChapter === 'string' ? item.lastChapter : '',
     lastChapterUrl: typeof item.lastChapterUrl === 'string' ? item.lastChapterUrl : '',
+    lastPanelIndex: Number.isInteger(lastPanelIndex) && lastPanelIndex >= 0 ? lastPanelIndex : 0,
+    lastPanelCount: Number.isInteger(lastPanelCount) && lastPanelCount > 0 ? lastPanelCount : 0,
+    lastProgress: Number.isFinite(lastProgress) && lastProgress >= 0 && lastProgress <= 1
+      ? lastProgress
+      : 0,
+    progressUpdatedAt: Number.isFinite(progressUpdatedAt) ? progressUpdatedAt : 0,
     timestamp: Number.isFinite(timestamp) ? timestamp : 0,
+  };
+}
+
+function normalizeReadingProgress(progress = {}) {
+  const panelIndex = Number(progress.panelIndex);
+  const panelCount = Number(progress.panelCount);
+  const progressRatio = Number(progress.progress);
+  const normalizedPanelIndex = Number.isInteger(panelIndex) && panelIndex >= 0 ? panelIndex : 0;
+  const normalizedPanelCount = Number.isInteger(panelCount) && panelCount > 0 ? panelCount : 0;
+  return {
+    panelIndex: normalizedPanelCount > 0
+      ? Math.min(normalizedPanelIndex, normalizedPanelCount - 1)
+      : normalizedPanelIndex,
+    panelCount: normalizedPanelCount,
+    progress: Number.isFinite(progressRatio) && progressRatio >= 0 && progressRatio <= 1
+      ? progressRatio
+      : normalizedPanelCount > 0
+        ? Math.min(1, (normalizedPanelIndex + 1) / normalizedPanelCount)
+        : 0,
   };
 }
 
@@ -170,16 +199,23 @@ export const Storage = {
     return !exists;
   },
 
-  async addHistory(manga, chapterName, chapterUrl) {
+  async addHistory(manga, chapterName, chapterUrl, progress = null) {
     const normalized = normalizeManga(manga);
     if (!normalized || !chapterUrl) return;
     let list = safeArray(await AsyncStorage.getItem('@history'));
     list = list.map(normalizeHistory).filter(Boolean);
+    const previous = list.find((m) => m.url === normalized.url);
     list = list.filter((m) => m.url !== normalized.url);
+    const incomingProgress = progress ? normalizeReadingProgress(progress) : null;
+    const keepPreviousProgress = previous?.lastChapterUrl === chapterUrl && !incomingProgress;
     list.unshift({
       ...normalized,
       lastChapter: chapterName,
       lastChapterUrl: chapterUrl,
+      lastPanelIndex: incomingProgress?.panelIndex ?? (keepPreviousProgress ? previous.lastPanelIndex : 0),
+      lastPanelCount: incomingProgress?.panelCount ?? (keepPreviousProgress ? previous.lastPanelCount : 0),
+      lastProgress: incomingProgress?.progress ?? (keepPreviousProgress ? previous.lastProgress : 0),
+      progressUpdatedAt: incomingProgress ? Date.now() : (keepPreviousProgress ? previous.progressUpdatedAt : 0),
       timestamp: Date.now(),
     });
     await AsyncStorage.setItem('@history', JSON.stringify(list.slice(0, 50)));
@@ -188,6 +224,40 @@ export const Storage = {
   async getHistory() {
     const val = await AsyncStorage.getItem('@history');
     return safeArray(val).map(normalizeHistory).filter(Boolean);
+  },
+
+  async getReadingProgress(mangaUrl, chapterUrl) {
+    if (!mangaUrl || !chapterUrl) return null;
+    const list = await this.getHistory();
+    const entry = list.find((item) => item.url === mangaUrl && item.lastChapterUrl === chapterUrl);
+    if (!entry || entry.lastPanelCount <= 0) return null;
+    return {
+      panelIndex: entry.lastPanelIndex,
+      panelCount: entry.lastPanelCount,
+      progress: entry.lastProgress,
+      updatedAt: entry.progressUpdatedAt,
+    };
+  },
+
+  async saveReadingProgress(manga, chapterName, chapterUrl, progress) {
+    const normalized = normalizeManga(manga);
+    if (!normalized || !chapterUrl) return;
+    const nextProgress = normalizeReadingProgress(progress);
+    let list = safeArray(await AsyncStorage.getItem('@history'));
+    list = list.map(normalizeHistory).filter(Boolean);
+    const existing = list.find((m) => m.url === normalized.url);
+    list = list.filter((m) => m.url !== normalized.url);
+    list.unshift({
+      ...normalized,
+      lastChapter: chapterName || existing?.lastChapter || '',
+      lastChapterUrl: chapterUrl,
+      lastPanelIndex: nextProgress.panelIndex,
+      lastPanelCount: nextProgress.panelCount,
+      lastProgress: nextProgress.progress,
+      progressUpdatedAt: Date.now(),
+      timestamp: Date.now(),
+    });
+    await AsyncStorage.setItem('@history', JSON.stringify(list.slice(0, 50)));
   },
 
   async getSettings() {
