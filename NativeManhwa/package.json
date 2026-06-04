@@ -1,0 +1,59 @@
+{
+  "name": "wibungomik",
+  "version": "1.1.2",
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "postinstall": "node scripts/prepare-hermesc.mjs",
+    "prepare:hermesc": "node scripts/prepare-hermesc.mjs",
+    "audit:providers": "node scripts/audit-providers.mjs",
+    "audit:panel-quality": "node scripts/audit-panel-quality.mjs",
+    "audit:modules": "node scripts/audit-ota-modules.mjs",
+    "audit:version": "node scripts/audit-version.mjs",
+    "audit:live": "playwright test scripts/live-feature-audit.spec.js --workers=1",
+    "audit:buttons": "playwright test scripts/live-button-audit.spec.js --workers=1",
+    "build:android:preview": "eas build --platform android --profile preview --non-interactive",
+    "build:android:prod": "eas build --platform android --profile production --non-interactive",
+    "build:android:local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android-release.ps1",
+    "build:android:local:fast": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android-release.ps1 -SkipPrebuild",
+    "install:android:local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android-release.ps1 -Install",
+    "install:android:local:fast": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android-release.ps1 -SkipPrebuild -Install",
+    "adb:apply-ota": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/adb-apply-ota.ps1",
+    "build:ios:preview": "eas build --platform ios --profile preview --non-interactive",
+    "update:preview": "eas update --channel preview --environment preview",
+    "update:production": "eas update --channel production --environment production"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^15.1.1",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-navigation/bottom-tabs": "^7.16.2",
+    "@react-navigation/native": "^7.2.5",
+    "@react-navigation/native-stack": "^7.16.0",
+    "crypto-js": "^4.2.0",
+    "expo": "^56.0.8",
+    "expo-build-properties": "~56.0.16",
+    "expo-file-system": "~56.0.7",
+    "expo-font": "~56.0.5",
+    "expo-splash-screen": "~56.0.10",
+    "expo-status-bar": "~56.0.4",
+    "expo-updates": "~56.0.17",
+    "node-html-parser": "^7.1.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.85.3",
+    "react-native-gesture-handler": "^2.31.2",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "4.25.2",
+    "react-native-web": "^0.21.2"
+  },
+  "private": true,
+  "overrides": {
+    "uuid": "^11.1.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0"
+  }
+}

@@ -1,0 +1,852 @@
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import {
+  View,
+  Text,
+  FlatList,
+  TouchableOpacity,
+  ActivityIndicator,
+  Alert,
+  StyleSheet,
+  useWindowDimensions,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
+import { StatusBar } from 'expo-status-bar';
+import { Ionicons } from '@expo/vector-icons';
+import { Scraper } from '../../scrapers';
+import { THEME } from '../theme';
+import { AutoHeightImage } from '../components/UIComponents';
+import { DownloadManager, Storage } from '../storage';
+import { MODULE_FEATURES } from '../modules/manifest';
+import { getModuleState, isFeatureEnabled } from '../services/moduleRuntime';
+
+export default function ReaderScreen({ route, navigation }) {
+  const params = route?.params || {};
+  const url = typeof params.url === 'string' ? params.url : '';
+  const title = typeof params.title === 'string' && params.title.trim()
+    ? params.title.trim()
+    : 'Reader';
+  const source = typeof params.source === 'string' ? params.source : '';
+  const routeManga = params.manga && typeof params.manga === 'object'
+    ? params.manga
+    : {};
+  const mangaUrl = typeof routeManga.url === 'string' ? routeManga.url : '';
+  const mangaTitle = typeof routeManga.title === 'string' && routeManga.title.trim()
+    ? routeManga.title.trim()
+    : title;
+  const mangaImage = typeof routeManga.image === 'string' ? routeManga.image : '';
+  const mangaSource = typeof routeManga.source === 'string' ? routeManga.source : source;
+  const routeChapters = Array.isArray(params.chapters) ? params.chapters : [];
+  const chapters = useMemo(
+    () =>
+      routeChapters
+        .filter((ch) => ch && typeof ch === 'object')
+        .map((ch, index) => ({
+          ...ch,
+          url: typeof ch.url === 'string' ? ch.url : '',
+          name: typeof ch.name === 'string' && ch.name.trim()
+            ? ch.name.trim()
+            : `Chapter ${index + 1}`,
+        })),
+    [routeChapters],
+  );
+  const parsedIndex = Number(params.currentIndex);
+  const currentIndex = Number.isInteger(parsedIndex) && parsedIndex >= 0
+    ? Math.min(parsedIndex, Math.max(chapters.length - 1, 0))
+    : 0;
+  const insets = useSafeAreaInsets();
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
+  const [images, setImages] = useState([]);
+  const [imageMetrics, setImageMetrics] = useState({});
+  const [activePanelIndex, setActivePanelIndex] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [mode, setMode] = useState('webtoon');
+  const [errorMessage, setErrorMessage] = useState('');
+  const [settings, setSettings] = useState({
+    autoAdvance: false,
+    cacheEnabled: true,
+    imageQuality: 'full',
+    panelSpacing: 'none',
+    readerMode: 'webtoon',
+    safeMode: true,
+  });
+  const [moduleState, setModuleState] = useState(null);
+  const settingsRef = useRef(settings);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [changingChapter, setChangingChapter] = useState(false);
+  const changingChapterRef = useRef(false);
+  const loadGenRef = useRef(0);
+  const listRef = useRef(null);
+  const userScrolledRef = useRef(false);
+  const autoAdvanceGateTriggeredRef = useRef(false);
+  const autoAdvanceEnabledRef = useRef(false);
+  const canGoNextRef = useRef(false);
+  const goNextChapterRef = useRef(() => {});
+  const activePanelIndexRef = useRef(0);
+  const setActivePanelRef = useRef(() => {});
+  const progressSaveTimerRef = useRef(null);
+  const progressSaverRef = useRef(() => {});
+  const restoredProgressKeyRef = useRef('');
+
+  // Load settings on mount and whenever screen is focused
+  useFocusEffect(
+    useCallback(() => {
+      Storage.getSettings().then(s => {
+        setSettings(s);
+        settingsRef.current = s;
+        setMode(s.readerMode === 'manga' ? 'manga' : 'webtoon');
+        setSettingsLoaded(true);
+      }).catch(() => setSettingsLoaded(true));
+      getModuleState()
+        .then(setModuleState)
+        .catch(() => setModuleState(null));
+    }, [])
+  );
+
+  const loadImages = async (targetUrl, retryCount = 0, gen) => {
+    const currentGen = gen ?? ++loadGenRef.current;
+    setLoading(true);
+    setErrorMessage('');
+    setImageMetrics({});
+    setActivePanelIndex(0);
+    activePanelIndexRef.current = 0;
+    userScrolledRef.current = false;
+    autoAdvanceGateTriggeredRef.current = false;
+    try {
+      if (!targetUrl) {
+        throw new Error('Missing chapter URL');
+      }
+      const local = await DownloadManager.getLocalUri(targetUrl);
+      if (local) {
+        if (loadGenRef.current !== currentGen) return;
+        setImages(local);
+      } else {
+        const remote = await Scraper.fetchImages(source, targetUrl);
+        if (!remote || remote.length === 0) {
+          throw new Error('No images returned from source');
+        }
+        if (settingsRef.current.cacheEnabled) {
+          if (loadGenRef.current !== currentGen) return;
+          setImages(remote);
+          Promise.allSettled(
+            remote.map(img => DownloadManager.cacheImage(img, targetUrl))
+          ).catch(() => {});
+        } else {
+          if (loadGenRef.current !== currentGen) return;
+          setImages(remote || []);
+        }
+      }
+    } catch (error) {
+      const errMsg = String(error?.message || error).slice(0, 220);
+
+      // Auto-retry once after a short delay
+      if (retryCount < 1) {
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        if (loadGenRef.current !== currentGen) return;
+        return loadImages(targetUrl, retryCount + 1, currentGen);
+      }
+
+      if (loadGenRef.current !== currentGen) return;
+      setImages([]);
+      setErrorMessage(errMsg);
+
+      // Show a more helpful error message
+      let userMessage = 'Could not load this chapter.';
+      if (errMsg.includes('All') && errMsg.includes('domains failed')) {
+        userMessage = `Source "${source}" is currently unreachable. Try another source or check your internet connection.`;
+      } else if (errMsg.includes('No images')) {
+        userMessage = `No images found for this chapter on "${source}". The site may have changed its layout.`;
+      } else if (errMsg.includes('timeout') || errMsg.includes('abort')) {
+        userMessage = 'Request timed out. Check your internet connection and try again.';
+      } else if (errMsg.includes('fetch') || errMsg.includes('Network')) {
+        userMessage = 'Network error. Make sure you have an active internet connection.';
+      } else if (errMsg.includes('script missing')) {
+        userMessage = 'Could not load chapter images from this source. Try another source.';
+      }
+      Alert.alert('Error', `${userMessage}\n\n[Log: ${errMsg}]`);
+    }
+    if (loadGenRef.current === currentGen) setLoading(false);
+  };
+
+  useEffect(() => {
+    if (!settingsLoaded) return;
+    let cancelled = false;
+    loadImages(url).then(() => {
+      if (!cancelled) { setChangingChapter(false); changingChapterRef.current = false; }
+    });
+    return () => {
+      cancelled = true;
+      loadGenRef.current += 1;
+    };
+  }, [url, source, settingsLoaded]);
+
+  const canGoPrev = currentIndex > 0 && Boolean(chapters[currentIndex - 1]?.url);
+  const canGoNext = currentIndex < chapters.length - 1 && Boolean(chapters[currentIndex + 1]?.url);
+  const pageCountLabel = `${images.length} page${images.length === 1 ? '' : 's'}`;
+  const measuredImageWidths = useMemo(
+    () => Object.values(imageMetrics)
+      .map((size) => Number(size?.width))
+      .filter((width) => Number.isFinite(width) && width > 0),
+    [imageMetrics],
+  );
+  const minSourceWidth = measuredImageWidths.length > 0
+    ? Math.min(...measuredImageWidths)
+    : 0;
+  const sourceWidthLabel = minSourceWidth > 0
+    ? `${minSourceWidth}px ${minSourceWidth < 720 ? 'low source' : minSourceWidth < 900 ? 'soft source' : 'source'}`
+    : '';
+  const chapterPositionLabel = chapters.length > 0 ? `${currentIndex + 1}/${chapters.length}` : '';
+  const panelPositionLabel = images.length > 0
+    ? `P ${Math.min(activePanelIndex + 1, images.length)}/${images.length}`
+    : pageCountLabel;
+  const readerProgress = [chapterPositionLabel, panelPositionLabel, sourceWidthLabel]
+    .filter(Boolean)
+    .join(' · ');
+  const readerToolsEnabled = isFeatureEnabled(moduleState, MODULE_FEATURES.readerFloatingTools);
+  const readerItems = useMemo(() => {
+    const pageItems = images.map((uri, index) => ({
+      type: 'image',
+      uri,
+      index,
+      key: `image-${index}`,
+    }));
+    if (settings.autoAdvance && canGoNext) {
+      pageItems.push({
+        type: 'next',
+        key: 'next-chapter-gate',
+      });
+    }
+    return pageItems;
+  }, [canGoNext, images, settings.autoAdvance]);
+
+  const toggleReaderMode = useCallback(async () => {
+    const nextMode = mode === 'webtoon' ? 'manga' : 'webtoon';
+    const nextSettings = { ...settingsRef.current, readerMode: nextMode };
+    setMode(nextMode);
+    setSettings(nextSettings);
+    settingsRef.current = nextSettings;
+    try {
+      await Storage.saveSettings(nextSettings);
+    } catch (_) {}
+  }, [mode]);
+
+  const cycleImageQuality = useCallback(async () => {
+    const current = settingsRef.current.imageQuality;
+    const nextQuality = current === 'full' ? 'sharp' : current === 'sharp' ? 'original' : 'full';
+    const nextSettings = { ...settingsRef.current, imageQuality: nextQuality };
+    setSettings(nextSettings);
+    settingsRef.current = nextSettings;
+    try {
+      await Storage.saveSettings(nextSettings);
+    } catch (_) {}
+  }, []);
+
+  const scrollToTop = useCallback(() => {
+    if (mode === 'manga') {
+      listRef.current?.scrollToIndex?.({ index: 0, animated: true });
+    } else {
+      listRef.current?.scrollToOffset?.({ offset: 0, animated: true });
+    }
+    activePanelIndexRef.current = 0;
+    setActivePanelIndex(0);
+    progressSaverRef.current(0);
+  }, [mode]);
+
+  const saveReaderHistory = useCallback((chapter) => {
+    if (!mangaUrl || !chapter?.url) return;
+    Storage.addHistory(
+      {
+        url: mangaUrl,
+        title: mangaTitle,
+        image: mangaImage,
+        source: mangaSource,
+      },
+      chapter.name || title,
+      chapter.url,
+    ).catch(() => {});
+  }, [mangaUrl, mangaTitle, mangaImage, mangaSource, title]);
+
+  const saveCurrentProgress = useCallback((panelIndex) => {
+    const currentChapter = chapters[currentIndex] || { url, name: title };
+    const chapterUrl = currentChapter?.url || url;
+    if (!mangaUrl || !chapterUrl || images.length === 0) return;
+    Storage.saveReadingProgress(
+      {
+        url: mangaUrl,
+        title: mangaTitle,
+        image: mangaImage,
+        source: mangaSource,
+      },
+      currentChapter.name || title,
+      chapterUrl,
+      {
+        panelIndex,
+        panelCount: images.length,
+        progress: images.length > 0 ? (panelIndex + 1) / images.length : 0,
+      },
+    ).catch(() => {});
+  }, [chapters, currentIndex, images.length, mangaImage, mangaSource, mangaTitle, mangaUrl, title, url]);
+
+  const scheduleProgressSave = useCallback((panelIndex) => {
+    if (progressSaveTimerRef.current) {
+      clearTimeout(progressSaveTimerRef.current);
+    }
+    progressSaveTimerRef.current = setTimeout(() => {
+      progressSaveTimerRef.current = null;
+      saveCurrentProgress(panelIndex);
+    }, 700);
+  }, [saveCurrentProgress]);
+
+  progressSaverRef.current = scheduleProgressSave;
+
+  const setActivePanel = useCallback((panelIndex) => {
+    const normalizedIndex = Math.max(0, Math.min(Number(panelIndex) || 0, Math.max(images.length - 1, 0)));
+    if (activePanelIndexRef.current === normalizedIndex) return;
+    activePanelIndexRef.current = normalizedIndex;
+    setActivePanelIndex(normalizedIndex);
+    scheduleProgressSave(normalizedIndex);
+  }, [images.length, scheduleProgressSave]);
+
+  setActivePanelRef.current = setActivePanel;
+
+  useEffect(() => () => {
+    if (progressSaveTimerRef.current) {
+      clearTimeout(progressSaveTimerRef.current);
+      progressSaveTimerRef.current = null;
+    }
+    saveCurrentProgress(activePanelIndexRef.current);
+  }, [saveCurrentProgress]);
+
+  const handleImageSize = useCallback((index, size) => {
+    if (!size?.uri || !size.width || !size.height) return;
+    const key = `${index}:${size.uri}`;
+    setImageMetrics((prev) => {
+      const current = prev[key];
+      if (current?.width === size.width && current?.height === size.height) return prev;
+      return {
+        ...prev,
+        [key]: {
+          width: size.width,
+          height: size.height,
+        },
+      };
+    });
+  }, []);
+
+  useEffect(() => {
+    const currentChapter = chapters[currentIndex] || { url, name: title };
+    saveReaderHistory(currentChapter);
+  }, [url, title, currentIndex, chapters, saveReaderHistory]);
+
+  const goPrevChapter = () => {
+    if (changingChapterRef.current) return;
+    if (canGoPrev) {
+      const prev = chapters[currentIndex - 1];
+      saveCurrentProgress(activePanelIndexRef.current);
+      saveReaderHistory(prev);
+      changingChapterRef.current = true;
+      setChangingChapter(true);
+      navigation.setParams({ url: prev.url, title: prev.name, currentIndex: currentIndex - 1 });
+    }
+  };
+
+  const goNextChapter = () => {
+    if (changingChapterRef.current) return;
+    if (canGoNext) {
+      const nxt = chapters[currentIndex + 1];
+      saveCurrentProgress(activePanelIndexRef.current);
+      saveReaderHistory(nxt);
+      changingChapterRef.current = true;
+      setChangingChapter(true);
+      navigation.setParams({ url: nxt.url, title: nxt.name, currentIndex: currentIndex + 1 });
+    }
+  };
+
+  goNextChapterRef.current = goNextChapter;
+  autoAdvanceEnabledRef.current = settings.autoAdvance === true;
+  canGoNextRef.current = canGoNext && !changingChapter;
+
+  useEffect(() => {
+    userScrolledRef.current = false;
+    autoAdvanceGateTriggeredRef.current = false;
+  }, [url, currentIndex, settings.autoAdvance]);
+
+  const viewabilityConfigRef = useRef({
+    viewAreaCoveragePercentThreshold: 55,
+    minimumViewTime: 220,
+  });
+  const onViewableItemsChangedRef = useRef(({ viewableItems }) => {
+    const imageItems = viewableItems
+      .map((entry) => entry?.item)
+      .filter((item) => item?.type === 'image' && Number.isInteger(item.index));
+    if (imageItems.length > 0) {
+      const nextActive = imageItems.reduce((best, item) => (
+        item.index > best.index ? item : best
+      ), imageItems[0]);
+      setActivePanelRef.current(nextActive.index);
+    }
+
+    if (autoAdvanceGateTriggeredRef.current) return;
+    if (!userScrolledRef.current) return;
+    if (!autoAdvanceEnabledRef.current || !canGoNextRef.current) return;
+    const gateVisible = viewableItems.some((entry) => entry?.item?.type === 'next');
+    if (!gateVisible) return;
+    autoAdvanceGateTriggeredRef.current = true;
+    goNextChapterRef.current();
+  });
+
+  const handleReaderScroll = useCallback((event) => {
+    const offset = mode === 'manga'
+      ? event?.nativeEvent?.contentOffset?.x
+      : event?.nativeEvent?.contentOffset?.y;
+    if (Math.abs(Number(offset) || 0) > 8) {
+      userScrolledRef.current = true;
+    }
+  }, [mode]);
+
+  const scrollToReaderIndex = useCallback((index, animated = true) => {
+    const targetIndex = Math.max(0, Math.min(Number(index) || 0, Math.max(readerItems.length - 1, 0)));
+    if (mode === 'manga') {
+      listRef.current?.scrollToIndex?.({ index: targetIndex, animated });
+      return;
+    }
+    listRef.current?.scrollToIndex?.({ index: targetIndex, animated, viewPosition: 0 });
+  }, [mode, readerItems.length]);
+
+  const handleScrollToIndexFailed = useCallback((info) => {
+    const targetIndex = Math.max(0, Math.min(Number(info?.index) || 0, Math.max(readerItems.length - 1, 0)));
+    const average = Number(info?.averageItemLength) || screenHeight;
+    listRef.current?.scrollToOffset?.({
+      offset: Math.max(0, average * targetIndex),
+      animated: false,
+    });
+    setTimeout(() => {
+      listRef.current?.scrollToIndex?.({
+        index: targetIndex,
+        animated: true,
+        viewPosition: 0,
+      });
+    }, 320);
+  }, [readerItems.length, screenHeight]);
+
+  useEffect(() => {
+    if (loading || images.length === 0 || !mangaUrl || !url) return undefined;
+    const restoreKey = `${mangaUrl}|${url}|${mode}|${images.length}`;
+    if (restoredProgressKeyRef.current === restoreKey) return undefined;
+    restoredProgressKeyRef.current = restoreKey;
+
+    let active = true;
+    Storage.getReadingProgress(mangaUrl, url)
+      .then((progress) => {
+        if (!active || !progress) return;
+        const targetIndex = Math.max(0, Math.min(progress.panelIndex || 0, images.length - 1));
+        if (targetIndex <= 0) return;
+        activePanelIndexRef.current = targetIndex;
+        setActivePanelIndex(targetIndex);
+        setTimeout(() => {
+          if (active) scrollToReaderIndex(targetIndex, false);
+        }, 280);
+      })
+      .catch(() => {});
+
+    return () => {
+      active = false;
+    };
+  }, [images.length, loading, mangaUrl, mode, scrollToReaderIndex, url]);
+
+  if (loading) {
+    return (
+      <View style={[styles.readerRoot, styles.centered]}>
+        <StatusBar style="light" />
+        <ActivityIndicator size="large" color={THEME.primary} />
+        <Text style={styles.loadingHintDark}>Loading pages…</Text>
+      </View>
+    );
+  }
+
+  const headerPadTop = Math.max(insets.top, THEME.space.md);
+
+  return (
+    <View style={styles.readerRoot}>
+      <StatusBar style="light" />
+      <View style={[styles.readerHeader, { paddingTop: headerPadTop }]}>
+        <View style={styles.headerLeft}>
+          <TouchableOpacity
+            onPress={() => navigation.goBack()}
+            hitSlop={6}
+            accessibilityLabel="Back"
+            activeOpacity={0.72}
+            style={styles.readerIconButton}
+          >
+            <Ionicons name="chevron-back" size={26} color={THEME.text} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={goPrevChapter}
+            hitSlop={6}
+            disabled={!canGoPrev || changingChapter}
+            accessibilityLabel="Previous chapter"
+            activeOpacity={0.72}
+            style={[
+              styles.readerIconButton,
+              (!canGoPrev || changingChapter) && styles.readerIconButtonDisabled,
+            ]}
+          >
+            <Ionicons
+              name="play-skip-back"
+              size={22}
+              color={!canGoPrev || changingChapter ? THEME.textMuted : THEME.text}
+            />
+          </TouchableOpacity>
+        </View>
+        <View style={styles.readerTitleWrap}>
+          <Text style={styles.readerTitle} numberOfLines={1}>
+            {title || 'Reader'}
+          </Text>
+          <Text style={styles.readerSubtitle} numberOfLines={1}>
+            {readerProgress}
+          </Text>
+        </View>
+        <View style={styles.headerRight}>
+          <TouchableOpacity
+            onPress={goNextChapter}
+            hitSlop={6}
+            disabled={!canGoNext || changingChapter}
+            accessibilityLabel="Next chapter"
+            activeOpacity={0.72}
+            style={[
+              styles.readerIconButton,
+              (!canGoNext || changingChapter) && styles.readerIconButtonDisabled,
+            ]}
+          >
+            <Ionicons
+              name="play-skip-forward"
+              size={22}
+              color={!canGoNext || changingChapter ? THEME.textMuted : THEME.text}
+            />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => loadImages(url, 0)}
+            hitSlop={6}
+            disabled={changingChapter}
+            accessibilityLabel="Reload chapter pages"
+            activeOpacity={0.72}
+            style={[
+              styles.readerIconButton,
+              changingChapter && styles.readerIconButtonDisabled,
+            ]}
+          >
+            <Ionicons
+              name="refresh-outline"
+              size={22}
+              color={changingChapter ? THEME.textMuted : THEME.text}
+            />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={toggleReaderMode}
+            hitSlop={6}
+            accessibilityLabel={mode === 'webtoon' ? 'Switch to page mode' : 'Switch to scroll mode'}
+            activeOpacity={0.72}
+            style={styles.readerIconButton}
+          >
+            <Ionicons
+              name={mode === 'webtoon' ? 'book-outline' : 'phone-portrait-outline'}
+              size={24}
+              color={THEME.text}
+            />
+          </TouchableOpacity>
+        </View>
+      </View>
+      {images.length === 0 ? (
+        <View style={styles.readerEmpty}>
+          <Ionicons name="image-outline" size={48} color={THEME.textMuted} />
+          <Text style={styles.readerEmptyText}>No pages loaded</Text>
+          {errorMessage ? (
+            <Text style={styles.readerErrorText} numberOfLines={4}>
+              {errorMessage}
+            </Text>
+          ) : null}
+          <TouchableOpacity style={styles.primaryButton} onPress={() => loadImages(url, 0)} activeOpacity={0.85}>
+            <Text style={styles.primaryButtonLabel}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <FlatList
+          ref={listRef}
+          key={mode}
+          data={readerItems}
+          keyExtractor={(item) => item.key}
+          initialNumToRender={mode === 'webtoon' ? 3 : 1}
+          maxToRenderPerBatch={mode === 'webtoon' ? 4 : 2}
+          windowSize={mode === 'webtoon' ? 7 : 3}
+          removeClippedSubviews={false}
+          horizontal={mode === 'manga'}
+          pagingEnabled={mode === 'manga'}
+          onScroll={handleReaderScroll}
+          scrollEventThrottle={64}
+          onViewableItemsChanged={onViewableItemsChangedRef.current}
+          viewabilityConfig={viewabilityConfigRef.current}
+          getItemLayout={mode === 'manga' ? (_, index) => ({
+            length: screenWidth,
+            offset: screenWidth * index,
+            index,
+          }) : undefined}
+          onScrollToIndexFailed={handleScrollToIndexFailed}
+          contentContainerStyle={
+            mode === 'webtoon'
+              ? { paddingTop: headerPadTop + 58, paddingBottom: insets.bottom + THEME.space.lg }
+              : undefined
+          }
+          renderItem={({ item }) => {
+            if (item.type === 'next') {
+              return (
+                <View
+                  style={[
+                    mode === 'manga'
+                      ? [styles.nextChapterPage, { width: screenWidth, minHeight: screenHeight, paddingTop: headerPadTop + 58, paddingBottom: insets.bottom + THEME.space.lg }]
+                      : [
+                          styles.nextChapterGate,
+                          {
+                            minHeight: Math.max(360, screenHeight - headerPadTop - 58),
+                            paddingBottom: insets.bottom + THEME.space.xl,
+                          },
+                        ],
+                  ]}
+                >
+                  <View style={styles.nextChapterPanel}>
+                    <Ionicons name="arrow-down-circle-outline" size={32} color={THEME.primary} />
+                    <Text style={styles.nextChapterTitle}>Next chapter ready</Text>
+                    <Text style={styles.nextChapterText}>
+                      Swipe once more after the last panel, or tap here to continue.
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.nextChapterButton}
+                      onPress={goNextChapter}
+                      disabled={!canGoNext || changingChapter}
+                      activeOpacity={0.78}
+                    >
+                      <Ionicons name="play-skip-forward" size={16} color={THEME.text} />
+                      <Text style={styles.nextChapterButtonText}>Next chapter</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              );
+            }
+            return (
+              <View style={mode === 'webtoon' && settings.panelSpacing === 'comfortable' ? styles.webtoonPanelGap : null}>
+                <AutoHeightImage
+                  source={item.uri}
+                  referer={url}
+                  fit={mode === 'manga' ? 'contain' : 'width'}
+                  topInset={mode === 'manga' ? headerPadTop + 58 : 0}
+                  bottomInset={mode === 'manga' ? insets.bottom + THEME.space.sm : 0}
+                  qualityMode={settings.imageQuality}
+                  onSize={(size) => handleImageSize(item.index, size)}
+                />
+              </View>
+            );
+          }}
+        />
+      )}
+      {images.length > 0 && readerToolsEnabled ? (
+        <View style={[styles.readerFloatingBar, { bottom: insets.bottom + THEME.space.md }]}>
+          <TouchableOpacity
+            onPress={scrollToTop}
+            accessibilityLabel="Jump to top"
+            activeOpacity={0.72}
+            style={styles.readerFloatingButton}
+          >
+            <Ionicons name="arrow-up" size={20} color={THEME.text} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={cycleImageQuality}
+            accessibilityLabel="Cycle panel quality"
+            activeOpacity={0.72}
+            style={styles.readerFloatingButton}
+          >
+            <Ionicons
+              name={settings.imageQuality === 'full' ? 'expand' : settings.imageQuality === 'sharp' ? 'scan' : 'contract'}
+              size={20}
+              color={THEME.text}
+            />
+          </TouchableOpacity>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  readerRoot: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  centered: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: THEME.space.xl,
+  },
+  loadingHintDark: {
+    color: THEME.textSecondary,
+    marginTop: THEME.space.md,
+    fontSize: 14,
+  },
+  readerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: THEME.space.md,
+    paddingBottom: THEME.space.sm,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  readerIconButton: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: THEME.radius.sm,
+  },
+  readerIconButtonDisabled: {
+    opacity: 0.45,
+  },
+  readerTitleWrap: {
+    flex: 1,
+    marginHorizontal: THEME.space.sm,
+    minWidth: 0,
+  },
+  readerTitle: {
+    color: THEME.text,
+    fontWeight: '600',
+    fontSize: 15,
+    textAlign: 'center',
+  },
+  readerSubtitle: {
+    color: THEME.textMuted,
+    fontSize: 11,
+    fontWeight: '600',
+    textAlign: 'center',
+    marginTop: 2,
+  },
+  readerEmpty: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: THEME.space.xl,
+  },
+  readerEmptyText: {
+    color: THEME.textSecondary,
+    marginTop: THEME.space.md,
+    marginBottom: THEME.space.sm,
+  },
+  readerErrorText: {
+    color: THEME.textMuted,
+    fontSize: 12,
+    lineHeight: 17,
+    textAlign: 'center',
+    marginBottom: THEME.space.lg,
+    paddingHorizontal: THEME.space.lg,
+  },
+  primaryButton: {
+    backgroundColor: THEME.primaryDark,
+    paddingVertical: THEME.space.md,
+    paddingHorizontal: THEME.space.xl * 2,
+    borderRadius: THEME.radius.md,
+  },
+  primaryButtonLabel: {
+    color: THEME.text,
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  webtoonPanelGap: {
+    marginBottom: THEME.space.sm,
+  },
+  nextChapterGate: {
+    minHeight: 220,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: THEME.space.lg,
+    paddingTop: THEME.space.xl,
+  },
+  nextChapterPage: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: THEME.space.lg,
+    backgroundColor: '#05070A',
+  },
+  nextChapterPanel: {
+    width: '100%',
+    maxWidth: 360,
+    alignItems: 'center',
+    borderRadius: THEME.radius.md,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    backgroundColor: 'rgba(15,23,42,0.92)',
+    paddingVertical: THEME.space.xl,
+    paddingHorizontal: THEME.space.lg,
+  },
+  nextChapterTitle: {
+    color: THEME.text,
+    fontSize: 17,
+    fontWeight: '800',
+    marginTop: THEME.space.md,
+  },
+  nextChapterText: {
+    color: THEME.textSecondary,
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: 'center',
+    marginTop: THEME.space.sm,
+  },
+  nextChapterButton: {
+    minHeight: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    marginTop: THEME.space.lg,
+    paddingHorizontal: THEME.space.lg,
+    borderRadius: THEME.radius.sm,
+    backgroundColor: THEME.primaryDark,
+    borderWidth: 1,
+    borderColor: THEME.primary,
+  },
+  nextChapterButtonText: {
+    color: THEME.text,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  readerFloatingBar: {
+    position: 'absolute',
+    right: THEME.space.md,
+    flexDirection: 'row',
+    gap: THEME.space.sm,
+    backgroundColor: 'rgba(0,0,0,0.62)',
+    borderRadius: THEME.radius.pill,
+    padding: THEME.space.xs,
+    zIndex: 11,
+  },
+  readerFloatingButton: {
+    width: 42,
+    height: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: THEME.radius.pill,
+    backgroundColor: 'rgba(26,36,56,0.92)',
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
+});
